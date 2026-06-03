@@ -24,6 +24,7 @@ interface CliOpts {
   rows?: number;
   quietMs?: number;
   claudePath?: string;
+  reflow?: boolean;
   debug?: boolean;
   dangerouslySkipPermissions?: boolean;
 }
@@ -46,6 +47,7 @@ program
   .option('--rows <n>', 'emulated terminal rows', (v) => parseInt(v, 10))
   .option('--quiet-ms <n>', 'quiescence threshold in ms', (v) => parseInt(v, 10))
   .option('--claude-path <path>', 'path to the claude binary', 'claude')
+  .option('--no-reflow', "keep the screen's literal line breaks (don't rejoin wrapped paragraphs)")
   .option('--dangerously-skip-permissions', 'run with --permission-mode bypassPermissions')
   .option('--debug', 'print engine logs to stderr')
   .action(async (promptArg: string | undefined, opts: CliOpts) => {
@@ -70,6 +72,7 @@ program
       claudePath: opts.claudePath,
       terminalSize: opts.cols && opts.rows ? { cols: opts.cols, rows: opts.rows } : undefined,
       quietMs: opts.quietMs,
+      reflow: opts.reflow,
       includePartialMessages: opts.outputFormat === 'stream-json',
       debug: opts.debug,
     };
