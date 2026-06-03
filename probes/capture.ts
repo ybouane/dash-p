@@ -26,7 +26,11 @@ const size = { cols: 100, rows: 30 };
 const RUN_MS = Number(process.env.RUN_MS ?? 20_000);
 // PERMISSION_MODE → forwarded as a claude arg. ALLOW=1 → press Enter on any
 // permission prompt (to capture both the prompt and the tool result).
-const claudeArgs = process.env.PERMISSION_MODE ? ['--permission-mode', process.env.PERMISSION_MODE] : [];
+// VERBOSE=1 → --verbose (un-collapse tool output). SESSION_ID=<uuid> → --session-id.
+const claudeArgs: string[] = [];
+if (process.env.PERMISSION_MODE) claudeArgs.push('--permission-mode', process.env.PERMISSION_MODE);
+if (process.env.VERBOSE === '1') claudeArgs.push('--verbose');
+if (process.env.SESSION_ID) claudeArgs.push('--session-id', process.env.SESSION_ID);
 const autoAllow = process.env.ALLOW === '1';
 
 const transport = new PtyTransport({
