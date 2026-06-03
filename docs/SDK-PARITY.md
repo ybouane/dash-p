@@ -14,22 +14,31 @@ what matches and what diverges.
 
 | Message | Status | Notes |
 |---|---|---|
-| `system` / `init` | ✅ | Fields populated best-effort; `tools`/`mcp_servers`/`slash_commands` are empty (not observable from the TUI cheaply). |
+| `system` / `init` | ✅ | Best-effort; `tools`/`mcp_servers`/`slash_commands` empty unless enriched. |
+| `system` / `session_state_changed` | ✅ | `idle` / `running` / `requires_action`, mirroring the engine state machine. |
 | `user` (prompt) | ✅ | Echo of the submitted prompt. |
-| `user` (tool_result) | ✅ | Emitted after a turn that ran tools; content is `tool_result` blocks paired to the turn's `tool_use` ids by order. |
-| `stream_event` | ✅ | Text deltas only, when `includePartialMessages: true`. `event` is a `content_block_delta` with `text_delta`. |
-| `assistant` | ✅ | Ordered `text` + `tool_use` blocks, reconstructed from the TUI's `⏺ Name(args)` / `⏺ prose` rendering. |
-| `result` / `success` | ✅ | Adds dash-p extensions `degraded` and `confidence`. |
+| `user` (tool_result) | ✅ | After a tool turn; `tool_result` blocks paired to the turn's `tool_use` ids, with `is_error` when detected. |
+| `stream_event` | ✅ | Text deltas, when `includePartialMessages: true`. |
+| `assistant` | ✅ | Ordered `text` + `tool_use` blocks (per-tool structured `input`). |
+| `result` / `success` | ✅ | Now includes `ttft_ms`, `usage`, `duration_api_ms`, `structured_output` (with `jsonSchema`), plus dash-p `degraded`/`confidence`/`usage_source`. |
 | `result` / `error_*` | ⚠️ | Surfaced on thrown errors / timeouts. |
-| everything else (hooks, tasks, status, compact, etc.) | ❌ | Not emitted. |
+| `stop_reason`, hooks, tasks, compact, thinking-as-message | ❌ | Not emitted (thinking is available via `enrichFromSession`). |
 
 ### Tool calls
 
-`tool_use` blocks carry `name` and `input: { raw: "<rendered args>" }` — the args
-are the **rendered** string from the TUI (e.g. `Bash(echo hi)` → `{ raw: "echo hi" }`),
-not the model's original JSON input, and long args may be width-truncated by the
-TUI. `tool_result` content is the rendered output (also potentially truncated for
-very large results). This is a fidelity ceiling of screen-scraping, not a bug.
+`tool_use.input` is mapped per-tool from the **rendered** args (`Bash` → `{ command }`,
+`Read`/`Write`/`Edit` → `{ file_path }`, `Grep`/`Glob` → `{ pattern }`, `WebFetch` →
+`{ url }`, …; unknown tools fall back to `{ raw }`). This is reconstructed from the
+screen, so long args can be width-truncated. **`--verbose` is launched by default**
+so tool *results* aren't collapsed. For the model's exact tool input JSON and full
+results, use `enrichFromSession` (reads the session JSONL — see below).
+
+### Metrics & usage
+
+`ttft_ms` and `duration_api_ms` come from timing + the footer timer. `usage` is
+scraped (`output_tokens` from the footer's `↓ N tokens`) with `usage_source:
+'scraped'`, or **exact** (`input`/`output`/cache tokens) with `usage_source:
+'session'` when `enrichFromSession` is on.
 
 ## Options
 
@@ -46,13 +55,30 @@ very large results). This is a fidelity ceiling of screen-scraping, not a bug.
 | `cwd` | ✅ | child working directory |
 | `abortController` | ✅ | abort → interrupt + stop |
 | `onPermission` (dash-p) | ✅ | dash-p's `canUseTool` analogue; called under "ask" mode, returns `allow`/`deny`/`abort` |
-| `canUseTool` (callback) | ❌ | use `onPermission` (above) instead |
-| `mcpServers`, `hooks`, `settingSources`, … | ❌ | not wired |
+| `mcpServers` | ✅ | `--mcp-config` (external file/command/url servers; in-process `createSdkMcpServer` can't work) |
+| `agents` | ✅ | `--agents` (JSON) |
+| `settings` / `settingSources` | ✅ | `--settings` / `--setting-sources` |
+| `betas` | ✅ | `--betas` |
+| `jsonSchema` | ✅ | structured output via prompt augmentation (the `--json-schema` flag is print-only); parsed into `result.structured_output` |
+| `canUseTool` (callback) | ❌ | use `onPermission` instead |
+| `hooks` | ❌ | JS-callback hooks can't be injected into a separate process |
 
 ### dash-p-only options
 
 `claudePath`, `terminalSize`, `includePartialMessages`, `quietMs`, `reflow`,
-`onPermission`, `debug`, `extraArgs` (forwarded verbatim to the `claude` CLI).
+`verbose` (default true), `onPermission`, `enrichFromSession`, `verifySession`,
+`debug`, `extraArgs` (forwarded verbatim to the `claude` CLI).
+
+### Bucket 3 — session JSONL (opt-in, read-only)
+
+With `--session-id` always set, Claude Code persists the conversation to
+`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. dash-p still *drives* only via the
+TUI, but two opt-in flags read that file:
+
+- `enrichFromSession` — replace the result text + usage with the **exact** values
+  (recovers markdown syntax, full tool results, real token counts).
+- `verifySession` — diff scraped output against the JSONL and warn on divergence.
+  A correctness oracle for the scraper (it already caught a ghost-suggestion leak).
 
 ## Control methods
 
@@ -76,11 +102,16 @@ warning gate at startup that dash-p does **not** auto-accept by default (it is a
 deliberate safety decision). Prefer `default` mode with pre-approved
 `allowedTools`, or wire `onPermission`.
 
-## Remaining gaps
+## Remaining gaps (the genuine ceilings)
 
-- **Tool input is the rendered string, not the model's JSON** (`input.raw`), and
-  may be width-truncated — a screen-scraping ceiling.
-- **Reflow is heuristic.** Paragraphs are rejoined by an inverse-word-wrap test;
-  pathological cases (a real line break that lands exactly at the wrap width) can
-  be misjoined. Use `reflow: false` / `--no-reflow` for verbatim line breaks.
-- **`mcpServers` / `hooks` / `canUseTool` callback** are not wired.
+These can't be closed from the screen alone — `enrichFromSession` is the exact
+path for the first three:
+
+- **Markdown syntax is rendered-then-lossy.** The TUI renders ```fences```/**bold**
+  as styled blocks, so scraped text drops the literal syntax. `verifySession` will
+  flag this as a divergence on markdown-heavy answers — it's the ceiling, not a bug.
+- **Tool input/result are reconstructed from the render** and can be width-truncated.
+- **Reflow is heuristic** (inverse word-wrap); a real break at exactly the wrap
+  width can be misjoined. `--no-reflow` keeps verbatim line breaks.
+- **In-process MCP (`createSdkMcpServer`), JS-callback `hooks`, and `canUseTool`**
+  can't be driven through a separate TUI process.

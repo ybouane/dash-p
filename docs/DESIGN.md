@@ -91,10 +91,24 @@ suppress the animations we want to observe). This is emulation correctness. We d
 not spoof identity or evade server-side controls — there's nothing to evade for a
 local experiment on your own account, and the sanctioned SDK exists anyway.
 
+## Ground-truth bridge (Bucket 3, opt-in)
+
+dash-p launches with `--session-id <uuid>`, so Claude Code persists the session to
+`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` — exact model text, tool-input JSON,
+full results, and per-message usage. `src/session/reader.ts` reads it (read-only;
+dash-p still drives only via the TUI) for two opt-in uses: `enrichFromSession`
+(substitute exact text/usage) and `verifySession` (diff scraped vs. truth — a
+standing correctness oracle). Everything else stays pure screen-scraping.
+
 ## Known limitations
 
-- Tool `input` is the **rendered** args string (`{ raw }`), not the model's JSON,
-  and the TUI may width-truncate long args/results — a screen-scraping ceiling.
+- Tool `input` is **reconstructed from the render** — mapped per-tool
+  (`Bash`→`{command}`, `Read`→`{file_path}`, …) with a `{ raw }` fallback — not the
+  model's JSON, and can be width-truncated. `enrichFromSession` recovers the exact
+  input. `--verbose` (default) prevents result collapse.
+- **Markdown is rendered-then-lossy**: the TUI draws ```fences```/**bold** as styled
+  blocks, so scraped text loses the literal syntax. `verifySession` flags it;
+  `enrichFromSession` recovers it.
 - **Reflow is heuristic.** Claude's TUI hard-wraps text itself (each row is its
   own buffer line, `isWrapped` is false), so we can't rely on the terminal's
   soft-wrap flag. Instead we rejoin paragraphs with the inverse of word-wrap: a

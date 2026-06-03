@@ -137,16 +137,21 @@ npm run probe -- "Reply with exactly: hello"   # capture real frames → fixture
 
 ✅ Working (validated against the live 2.1.x TUI): one-shot + streaming turns,
 `text`/`json`/`stream-json`, model selection, workspace-trust auto-accept,
-**structured `tool_use`/`tool_result` blocks**, **paragraph reflow** (rejoining
-the TUI's hard-wrapped lines, code/list-aware), streamed-delta accumulation,
-`onPermission` handling, clean extraction, confidence scoring + degraded
+**structured `tool_use`/`tool_result` blocks** with per-tool `input`, **`--verbose`
+by default** so tool output isn't collapsed, **paragraph reflow** (code/list-aware),
+**`ttft_ms` + scraped token usage**, **`session_state_changed` messages**,
+**`jsonSchema` → `structured_output`**, `onPermission`, confidence + degraded
 fallback.
 
-⚠️ Fidelity ceilings (inherent to screen-scraping): tool `input` is the
-*rendered* args string (`{ raw }`), not the model's JSON, and may be
-width-truncated; reflow is heuristic (`--no-reflow` for verbatim breaks); MCP
-servers, hooks, and the `canUseTool` callback aren't wired. See
-[docs/SDK-PARITY.md](docs/SDK-PARITY.md).
+🔬 Optional ground-truth bridge (`--verify-session` / `--enrich-from-session`):
+reads the session JSONL Claude Code writes to disk for an exact cross-check or to
+substitute exact text/usage. dash-p still *drives* only through the TUI; this is a
+read-only oracle (it already caught a real extraction bug).
+
+⚠️ Fidelity ceilings (inherent to screen-scraping; use enrich for exactness):
+markdown syntax is rendered-then-lossy, tool args/results can be width-truncated,
+reflow is heuristic (`--no-reflow` for verbatim), and in-process MCP / JS hooks /
+`canUseTool` can't be driven. See [docs/SDK-PARITY.md](docs/SDK-PARITY.md).
 
 This is a research experiment, not a supported product. Use your own account;
 respect Claude Code's terms.

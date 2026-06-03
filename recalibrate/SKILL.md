@@ -93,9 +93,30 @@ npx tsx src/cli/index.ts -o json "What is 6 times 7? Reply with just the number.
 #   → result must be "42", degraded:false, confidence ≥ 0.5
 ```
 
-Optional but strong: cross-check against the sanctioned oracle —
-`claude -p "<same prompt>"` — and confirm dash-p's extracted answer is
-semantically equal. Divergence means the profile still drifts.
+**Strongest oracle — the session JSONL cross-check.** When dash-p drives the TUI
+with `--session-id`, Claude Code writes the conversation to
+`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` — ground truth with the exact
+model text, tool input, and usage. Use `--verify-session` to diff the scraped
+output against it automatically:
+
+```bash
+npx tsx src/cli/index.ts -o json --verify-session \
+  "Run this exact command and show its output: echo calib-check"
+#   → stderr "dash-p[session]: scraped text diverges …" flags a mismatch
+```
+
+How to read a divergence:
+- **Markdown-rendering loss is expected** (the TUI renders ```code```/**bold** as
+  styled blocks, so scraped text drops the literal syntax). A low similarity on a
+  markdown-heavy answer is the known ceiling, not a regression — confirm with
+  `--enrich-from-session`, which substitutes the exact JSONL text.
+- **A divergence on plain prose, or chrome leaking into the answer** (a stray `❯`,
+  a footer fragment, a tool line) **is a real recognizer bug** — fix the profile
+  or `src/recognize/` before promoting. (This is literally how the `❯ <ghost
+  suggestion>` leak was caught.)
+
+The older oracle still applies as a sanity check: `claude -p "<same prompt>"` and
+confirm semantic equality.
 
 ### 5. Promote or escalate
 
