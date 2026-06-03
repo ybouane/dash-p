@@ -11,7 +11,9 @@
 import { randomUUID } from 'node:crypto';
 import { DashPEngine } from '../controller/engine.js';
 import type { PermissionPolicy } from '../types.js';
+import type { TranscriptBlock } from '../types.js';
 import type {
+  ContentBlock,
   Options,
   PermissionMode,
   Query,
@@ -34,7 +36,11 @@ export function query(params: { prompt: string | AsyncIterable<SDKUserMessage>; 
     cwd: options.cwd,
     size: options.terminalSize,
     permissionPolicy: permissionModeToPolicy(options.permissionMode),
+    onPermission: options.onPermission
+      ? async (question, opts) => ({ action: await options.onPermission!(question, opts) })
+      : undefined,
     quietMs: options.quietMs,
+    reflow: options.reflow,
     debug: options.debug,
   });
 
@@ -65,7 +71,17 @@ export function query(params: { prompt: string | AsyncIterable<SDKUserMessage>; 
         queue.push(userMessage(text, sessionId));
         const res = await engine.send(text);
         turns++;
-        queue.push(assistantMessage(res.text, options.model, sessionId));
+        // Map structured blocks → an assistant message (text + tool_use) plus,
+        // if any tools ran, a user message carrying the tool_result blocks.
+        const { assistant, toolResults } = buildTurnMessages(
+          res.blocks,
+          res.text,
+          options.model,
+          sessionId,
+          turns,
+        );
+        queue.push(assistant);
+        if (toolResults) queue.push(toolResults);
         const result: SDKResultMessage = {
           type: 'result',
           subtype: 'success',
@@ -113,14 +129,9 @@ export function query(params: { prompt: string | AsyncIterable<SDKUserMessage>; 
     setPermissionMode: async (mode: PermissionMode) => {
       engine.setPermissionPolicy(permissionModeToPolicy(mode));
     },
-    setModel: async (_model?: string) => {
-      // Live model switching would require a /model round-trip in the TUI; not
-      // yet implemented. Set `model` in options at query() time instead.
-      engine.emitEvent({
-        type: 'log',
-        level: 'warn',
-        message: 'setModel() is a no-op in TUI mode; pass options.model to query() instead',
-      });
+    setModel: async (model?: string) => {
+      // Best-effort live switch via the `/model` slash command (see engine).
+      await engine.setModelLive(model);
     },
   };
 
@@ -203,14 +214,58 @@ function userMessage(text: string, sessionId: string): SDKUserMessage {
   };
 }
 
-function assistantMessage(text: string, model: string | undefined, sessionId: string): SDKAssistantMessage {
-  return {
+/**
+ * Turn the engine's structured blocks into SDK messages:
+ *  - one `assistant` message whose content is the ordered text + tool_use blocks
+ *  - one `user` message carrying the tool_result blocks (paired by order), when
+ *    any tools ran — mirroring how the real SDK threads tool results back.
+ */
+function buildTurnMessages(
+  blocks: TranscriptBlock[],
+  proseText: string,
+  model: string | undefined,
+  sessionId: string,
+  turnNo: number,
+): { assistant: SDKAssistantMessage; toolResults: SDKUserMessage | null } {
+  const assistantContent: ContentBlock[] = [];
+  const toolUseIds: string[] = [];
+
+  for (const b of blocks) {
+    if (b.kind === 'text') {
+      assistantContent.push({ type: 'text', text: b.text });
+    } else if (b.kind === 'tool_use') {
+      const id = `dashp_${turnNo}_${toolUseIds.length}`;
+      toolUseIds.push(id);
+      assistantContent.push({ type: 'tool_use', id, name: b.name, input: { raw: b.args } });
+    }
+  }
+  if (assistantContent.length === 0) assistantContent.push({ type: 'text', text: proseText });
+
+  const resultBlocks = blocks.filter((b): b is { kind: 'tool_result'; text: string } => b.kind === 'tool_result');
+  let toolResults: SDKUserMessage | null = null;
+  if (resultBlocks.length) {
+    const content: ContentBlock[] = resultBlocks.map((b, i) => ({
+      type: 'tool_result',
+      tool_use_id: toolUseIds[i] ?? `dashp_${turnNo}_${i}`,
+      content: b.text,
+    }));
+    toolResults = {
+      type: 'user',
+      message: { role: 'user', content },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+      session_id: sessionId,
+    };
+  }
+
+  const assistant: SDKAssistantMessage = {
     type: 'assistant',
-    message: { role: 'assistant', content: [{ type: 'text', text }], model: model ?? 'default' },
+    message: { role: 'assistant', content: assistantContent, model: model ?? 'default' },
     parent_tool_use_id: null,
     uuid: randomUUID(),
     session_id: sessionId,
   };
+  return { assistant, toolResults };
 }
 
 function partial(text: string, sessionId: string): SDKPartialAssistantMessage {

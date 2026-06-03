@@ -129,6 +129,12 @@ export interface Options {
   /** Maps to --append-system-prompt. */
   appendSystemPrompt?: string;
   permissionMode?: PermissionMode;
+  /**
+   * dash-p's equivalent of `canUseTool`: called when the TUI shows a permission
+   * prompt and `permissionMode` resolves to "ask". Return how to respond. If
+   * omitted under "ask", prompts are denied (cautious default).
+   */
+  onPermission?: (question: string, options: string[]) => Promise<'allow' | 'deny' | 'abort'>;
   /** Forwarded verbatim as extra CLI args (escape hatch). */
   extraArgs?: string[];
 
@@ -141,6 +147,8 @@ export interface Options {
   includePartialMessages?: boolean;
   /** Quiescence threshold in ms. */
   quietMs?: number;
+  /** Rejoin TUI-hard-wrapped paragraphs into single lines (default true). */
+  reflow?: boolean;
   debug?: boolean;
 }
 
