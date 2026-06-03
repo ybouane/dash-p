@@ -24,10 +24,14 @@ const FIX = join(here, '..', 'fixtures');
 const prompt = process.argv[2] ?? 'Reply with exactly: hello from the tui';
 const size = { cols: 100, rows: 30 };
 const RUN_MS = Number(process.env.RUN_MS ?? 20_000);
+// PERMISSION_MODE → forwarded as a claude arg. ALLOW=1 → press Enter on any
+// permission prompt (to capture both the prompt and the tool result).
+const claudeArgs = process.env.PERMISSION_MODE ? ['--permission-mode', process.env.PERMISSION_MODE] : [];
+const autoAllow = process.env.ALLOW === '1';
 
 const transport = new PtyTransport({
   file: process.env.CLAUDE_PATH ?? 'claude',
-  args: [],
+  args: claudeArgs,
   size,
   unsetEnv: ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_SESSION', 'CLAUDE_CODE_SIMPLE'],
 });
@@ -75,8 +79,22 @@ function tick(): void {
       transport.write('\x1b[200~' + prompt + '\x1b[201~');
       setTimeout(() => transport.write('\r'), 150);
     }
+    return;
+  }
+
+  // Auto-allow tool permission prompts (accept the highlighted default) so we
+  // can capture the tool result too. Throttled so we don't spam Enter.
+  if (autoAllow && Date.now() - lastAllow > 1500) {
+    const rec = recognizer.recognize(snap);
+    if (rec.state === 'tool_permission') {
+      lastAllow = Date.now();
+      log(`permission prompt → Enter (allow): ${JSON.stringify(rec.permission?.question)}`);
+      transport.write('\r');
+    }
   }
 }
+
+let lastAllow = 0;
 
 function log(m: string): void {
   process.stderr.write(`[probe] ${m}\n`);
