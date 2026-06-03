@@ -26,6 +26,7 @@ import type {
   ScreenSnapshot,
   TerminalSize,
   TranscriptBlock,
+  TurnMetrics,
 } from '../types.js';
 
 export interface EngineOptions {
@@ -58,6 +59,10 @@ export interface TurnResult {
   degraded: boolean;
   confidence: number;
   durationMs: number;
+  /** Time to first assistant block (ms), scraped from when output first appeared. */
+  ttftMs?: number;
+  /** Token/duration metrics scraped from the footer during the turn. */
+  metrics?: TurnMetrics;
 }
 
 type Latest = { snapshot: ScreenSnapshot; recognition: Recognition };
@@ -85,6 +90,10 @@ export class DashPEngine extends EventEmitter {
    * a very long answer scrolls out of the emulator's scrollback window.
    */
   private turnTextAcc = '';
+  /** Timestamp the first assistant block appeared this turn (for ttft). */
+  private turnFirstBlockAt = 0;
+  /** Latest non-empty metrics scraped this turn. */
+  private turnMetrics: TurnMetrics = {};
   private exited = false;
 
   constructor(options: EngineOptions = {}) {
@@ -211,6 +220,18 @@ export class DashPEngine extends EventEmitter {
     const sig = contentSignature(snapshot, this.profile, recognition.contentRange ?? { start: 0, end: snapshot.lines.length });
     this.quiescence.update(sig);
 
+    // Capture ttft (first assistant block) and roll up the latest metrics.
+    if (this.turnStarted || this.submitting) {
+      if (this.turnFirstBlockAt === 0 && recognition.blocks.some((b) => b.kind === 'text' || b.kind === 'tool_use')) {
+        this.turnFirstBlockAt = Date.now();
+      }
+      if (recognition.metrics) {
+        if (recognition.metrics.outputTokens !== undefined) this.turnMetrics.outputTokens = recognition.metrics.outputTokens;
+        if (recognition.metrics.contextTokens !== undefined) this.turnMetrics.contextTokens = recognition.metrics.contextTokens;
+        if (recognition.metrics.durationSec !== undefined) this.turnMetrics.durationSec = recognition.metrics.durationSec;
+      }
+    }
+
     // Emit streaming deltas (best-effort clean appends) and accumulate them so
     // the final result survives content scrolling out of the buffer.
     if (recognition.assistantText && recognition.assistantText !== this.lastAssistant) {
@@ -254,6 +275,8 @@ export class DashPEngine extends EventEmitter {
     const startedAt = Date.now();
     this.lastAssistant = '';
     this.turnTextAcc = '';
+    this.turnFirstBlockAt = 0;
+    this.turnMetrics = {};
     this.turnStarted = false;
     this.submitting = true;
     this.quiescence.reset();
@@ -268,9 +291,15 @@ export class DashPEngine extends EventEmitter {
 
     const rec = this.latest?.recognition;
     let text = rec?.assistantText ?? '';
-    // Prefer the accumulated stream if it captured more than the final snapshot
-    // (i.e. earlier content scrolled out of the window).
-    if (this.turnTextAcc.length > text.length) text = this.turnTextAcc;
+    // Prefer the final clean extraction. Use the accumulated stream only when it
+    // is a genuine scroll-out — i.e. it ENDS WITH the still-visible tail (the
+    // head scrolled away). If the accumulator merely has extra trailing content
+    // (e.g. a transient ghost suggestion leaked in), keep the clean extraction.
+    if (!text) {
+      text = this.turnTextAcc;
+    } else if (this.turnTextAcc.length > text.length && this.turnTextAcc.endsWith(text)) {
+      text = this.turnTextAcc;
+    }
     let degraded = false;
     if (!text || (rec && rec.confidence < 0.5)) {
       // Fallback: dump the cleaned transcript rather than crash or lie.
@@ -290,6 +319,8 @@ export class DashPEngine extends EventEmitter {
       degraded,
       confidence: rec?.confidence ?? 0,
       durationMs: Date.now() - startedAt,
+      ttftMs: this.turnFirstBlockAt ? this.turnFirstBlockAt - startedAt : undefined,
+      metrics: Object.keys(this.turnMetrics).length ? { ...this.turnMetrics } : undefined,
     };
     this.emitEvent({ type: 'turn-complete', text });
     return result;
