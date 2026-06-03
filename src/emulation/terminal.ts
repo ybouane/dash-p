@@ -31,7 +31,7 @@ export class TerminalEmulator {
     this.term = new Terminal({
       cols: opts.size.cols,
       rows: opts.size.rows,
-      scrollback: opts.scrollback ?? 50_000,
+      scrollback: opts.scrollback ?? 100_000,
       allowProposedApi: true,
       // We never render; keep it lean.
       convertEol: false,
@@ -58,8 +58,12 @@ export class TerminalEmulator {
     const buf = this.term.buffer.active;
     const total = buf.length;
     const lines: string[] = new Array(total);
+    const wrapped: boolean[] = new Array(total);
     for (let i = 0; i < total; i++) {
-      lines[i] = buf.getLine(i)?.translateToString(true) ?? '';
+      const line = buf.getLine(i);
+      lines[i] = line?.translateToString(true) ?? '';
+      // isWrapped: this row is the continuation of the previous logical line.
+      wrapped[i] = line?.isWrapped ?? false;
     }
 
     const rows = this.term.rows;
@@ -69,6 +73,7 @@ export class TerminalEmulator {
 
     return {
       lines,
+      wrapped,
       viewport,
       cursor: { x: buf.cursorX, y: buf.cursorY },
       size: { cols: this.term.cols, rows: this.term.rows },

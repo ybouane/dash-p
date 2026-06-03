@@ -25,6 +25,7 @@ import type {
   Recognition,
   ScreenSnapshot,
   TerminalSize,
+  TranscriptBlock,
 } from '../types.js';
 
 export interface EngineOptions {
@@ -42,6 +43,8 @@ export interface EngineOptions {
   turnTimeoutMs?: number;
   /** Auto-accept the workspace-trust dialog at startup (default true). */
   trustWorkspace?: boolean;
+  /** Rejoin TUI-hard-wrapped paragraphs into single lines (default true). */
+  reflow?: boolean;
   /** Called for permission prompts when policy is 'ask'. */
   onPermission?: (question: string, options: string[]) => Promise<PermissionDecision>;
   debug?: boolean;
@@ -49,6 +52,8 @@ export interface EngineOptions {
 
 export interface TurnResult {
   text: string;
+  /** The turn parsed into structured blocks (text + tool_use + tool_result). */
+  blocks: TranscriptBlock[];
   /** True when extraction had to fall back to a raw transcript dump. */
   degraded: boolean;
   confidence: number;
@@ -74,6 +79,12 @@ export class DashPEngine extends EventEmitter {
   private submitting = false;
   private turnStarted = false;
   private lastAssistant = '';
+  /**
+   * Append-only accumulation of streamed prose for the current turn. Because we
+   * collect deltas as they arrive, the result stays complete even if the top of
+   * a very long answer scrolls out of the emulator's scrollback window.
+   */
+  private turnTextAcc = '';
   private exited = false;
 
   constructor(options: EngineOptions = {}) {
@@ -87,6 +98,7 @@ export class DashPEngine extends EventEmitter {
       readyTimeoutMs: options.readyTimeoutMs ?? 30_000,
       turnTimeoutMs: options.turnTimeoutMs ?? 240_000,
       trustWorkspace: options.trustWorkspace ?? true,
+      reflow: options.reflow ?? true,
       debug: options.debug ?? false,
       onPermission: options.onPermission,
       version: options.version,
@@ -109,7 +121,7 @@ export class DashPEngine extends EventEmitter {
   async start(): Promise<void> {
     const version = this.opts.version ?? this.detectVersion();
     this.profile = loadProfile(version);
-    this.recognizer = new Recognizer(this.profile);
+    this.recognizer = new Recognizer(this.profile, this.opts.reflow);
     this.log(`loaded profile for ${this.profile.generatedFor}`, 'info');
 
     this.transport = new PtyTransport({
@@ -199,11 +211,15 @@ export class DashPEngine extends EventEmitter {
     const sig = contentSignature(snapshot, this.profile, recognition.contentRange ?? { start: 0, end: snapshot.lines.length });
     this.quiescence.update(sig);
 
-    // Emit streaming deltas (best-effort clean appends).
+    // Emit streaming deltas (best-effort clean appends) and accumulate them so
+    // the final result survives content scrolling out of the buffer.
     if (recognition.assistantText && recognition.assistantText !== this.lastAssistant) {
       if (recognition.assistantText.startsWith(this.lastAssistant)) {
         const delta = recognition.assistantText.slice(this.lastAssistant.length);
-        if (delta) this.emitEvent({ type: 'delta', text: delta });
+        if (delta) {
+          this.emitEvent({ type: 'delta', text: delta });
+          this.turnTextAcc += delta;
+        }
       }
       this.lastAssistant = recognition.assistantText;
     }
@@ -237,6 +253,7 @@ export class DashPEngine extends EventEmitter {
 
     const startedAt = Date.now();
     this.lastAssistant = '';
+    this.turnTextAcc = '';
     this.turnStarted = false;
     this.submitting = true;
     this.quiescence.reset();
@@ -251,6 +268,9 @@ export class DashPEngine extends EventEmitter {
 
     const rec = this.latest?.recognition;
     let text = rec?.assistantText ?? '';
+    // Prefer the accumulated stream if it captured more than the final snapshot
+    // (i.e. earlier content scrolled out of the window).
+    if (this.turnTextAcc.length > text.length) text = this.turnTextAcc;
     let degraded = false;
     if (!text || (rec && rec.confidence < 0.5)) {
       // Fallback: dump the cleaned transcript rather than crash or lie.
@@ -266,6 +286,7 @@ export class DashPEngine extends EventEmitter {
 
     const result: TurnResult = {
       text,
+      blocks: rec?.blocks ?? [],
       degraded,
       confidence: rec?.confidence ?? 0,
       durationMs: Date.now() - startedAt,
@@ -345,6 +366,21 @@ export class DashPEngine extends EventEmitter {
   async interrupt(): Promise<void> {
     this.actions?.interrupt();
     await delay(50);
+  }
+
+  /**
+   * Best-effort live model switch via the `/model <name>` slash command. The TUI
+   * may instead open a picker for some inputs; this types the command and Enter,
+   * then waits to return to ready. Prefer passing `model` at construction time.
+   */
+  async setModelLive(model?: string): Promise<void> {
+    if (!model) return;
+    await this.waitForState((s) => s === 'ready', this.opts.readyTimeoutMs, 'ready (setModel)');
+    this.actions.type(`/model ${model}`);
+    await delay(150);
+    this.actions.enter();
+    await delay(300);
+    this.log(`requested model switch → ${model} (best-effort)`, 'info');
   }
 
   private async waitForState(
