@@ -12,13 +12,20 @@ import type {
   PermissionPrompt,
   Recognition,
   ScreenSnapshot,
+  TranscriptBlock,
 } from '../types.js';
 import type { Profile } from './profile.js';
 
 export class Recognizer {
   private readonly chromeRegexes: RegExp[];
 
-  constructor(private readonly profile: Profile) {
+  /**
+   * @param reflow When true (default), rejoin paragraphs that the TUI hard-wrapped
+   *   at the terminal width back into single lines (for `claude -p`-style output).
+   *   Code fences, list items, headings, and blank lines are preserved. Disable
+   *   if you need the screen's literal line breaks.
+   */
+  constructor(private readonly profile: Profile, private readonly reflow = true) {
     this.chromeRegexes = profile.chromePatterns.map((p) => new RegExp(p));
   }
 
@@ -51,10 +58,13 @@ export class Recognizer {
     const menu = permission ? null : this.detectMenu(snap.lines);
     if (menu) matched.push('menu');
 
-    // 3. Does the content region already contain assistant output?
-    const assistantText = this.extractLatestAssistant(snap.lines, contentRange);
-    const hasAssistant = !!assistantText && assistantText.trim().length > 0;
+    // 3. Parse the latest assistant turn into structured blocks (text +
+    //    tool_use + tool_result) and derive the prose from them.
+    const blocks = this.extractTurnBlocks(snap, contentRange);
+    const assistantText = this.proseFromBlocks(blocks);
+    const hasAssistant = blocks.some((b) => b.kind === 'text' || b.kind === 'tool_use');
     if (hasAssistant) matched.push('assistant-text');
+    if (blocks.some((b) => b.kind === 'tool_use')) matched.push('tool-use');
 
     // 4. Decide state by priority.
     let state: EngineState;
@@ -84,6 +94,7 @@ export class Recognizer {
       state,
       contentRange,
       assistantText: hasAssistant ? assistantText : null,
+      blocks,
       confidence,
       matched,
     };
@@ -189,34 +200,186 @@ export class Recognizer {
   }
 
   /**
-   * Extract the most recent assistant message from the content region. Best
-   * effort for v1: take text after the last assistant marker, drop chrome lines.
+   * Rejoin soft-wrapped rows into logical lines. The emulator wraps a long
+   * paragraph across several rows and flags each continuation with `isWrapped`;
+   * concatenating them reconstructs the original paragraph so a wrapped
+   * assistant message becomes one logical line (e.g. "⏺ …the whole thing…").
    */
-  private extractLatestAssistant(lines: string[], range: { start: number; end: number }): string | null {
-    const slice = lines.slice(range.start, range.end);
-    // Find the last assistant marker line. Without one there is no assistant
-    // turn yet (e.g. we're still in the thinking phase) — return null so the
-    // controller reports `thinking` and we don't stream pre-response chrome.
-    let last = -1;
-    for (let i = slice.length - 1; i >= 0; i--) {
-      if (this.startsWithAny(slice[i]!.trimStart(), this.profile.assistantMarkers)) {
-        last = i;
+  private logicalLines(snap: ScreenSnapshot, range: { start: number; end: number }): string[] {
+    const out: string[] = [];
+    for (let i = range.start; i < range.end; i++) {
+      const line = snap.lines[i] ?? '';
+      if (snap.wrapped[i] && out.length > 0) {
+        out[out.length - 1] += line; // continuation of the previous logical line
+      } else {
+        out.push(line);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Parse the latest assistant turn into ordered structured blocks. A turn is
+   * everything after the most recent echoed user message; within it the TUI
+   * renders:
+   *   ⏺ Name(args)      → tool_use
+   *     ⎿  output       → tool_result (indented continuations follow)
+   *   ⏺ prose…          → text (indented continuations follow)
+   */
+  private extractTurnBlocks(snap: ScreenSnapshot, range: { start: number; end: number }): TranscriptBlock[] {
+    const logical = this.logicalLines(snap, range);
+
+    // Bound the turn to everything after the latest non-empty user echo.
+    let userIdx = -1;
+    for (let i = logical.length - 1; i >= 0; i--) {
+      const t = logical[i]!.trimStart();
+      if (this.startsWithAny(t, this.profile.userMarkers) && this.stripMarker(t, this.profile.userMarkers).trim()) {
+        userIdx = i;
         break;
       }
     }
-    if (last === -1) return null;
-    const body = slice.slice(last);
-    const cleaned = body
-      .map((l) => this.stripMarker(l, this.profile.assistantMarkers))
-      .filter((l) => !this.isChrome(l));
-    const text = cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    const turn = logical.slice(userIdx + 1);
+
+    const resultMarkers = this.profile.toolUse?.resultMarkers ?? [];
+    const nameRe = this.profile.toolUse ? new RegExp(this.profile.toolUse.namePattern) : null;
+    const blocks: TranscriptBlock[] = [];
+
+    for (let i = 0; i < turn.length; ) {
+      const raw = turn[i]!;
+      const t = raw.trimStart();
+      if (t === '' || this.isChrome(raw)) {
+        i++;
+        continue;
+      }
+
+      // Assistant marker: either a tool_use (Name(args)) or a prose text block.
+      if (this.startsWithAny(t, this.profile.assistantMarkers)) {
+        const content = this.stripMarker(raw, this.profile.assistantMarkers);
+        const m = nameRe ? content.match(nameRe) : null;
+        if (m) {
+          let args = (m[2] ?? '').trim();
+          if (args.endsWith(')')) args = args.slice(0, -1);
+          blocks.push({ kind: 'tool_use', name: m[1]!, args });
+          i++;
+          continue;
+        }
+        const textLines = [content];
+        i++;
+        while (i < turn.length) {
+          const nt = turn[i]!.trimStart();
+          if (this.startsWithAny(nt, this.profile.assistantMarkers) || this.startsWithAny(nt, resultMarkers)) break;
+          if (!this.isChrome(turn[i]!)) textLines.push(this.dedent(turn[i]!));
+          i++;
+        }
+        const text = this.reflowText(textLines, snap.size.cols);
+        if (text) blocks.push({ kind: 'text', text });
+        continue;
+      }
+
+      // Tool result marker.
+      if (this.startsWithAny(t, resultMarkers)) {
+        const first = this.stripMarker(t, resultMarkers).trim();
+        const resLines = first ? [first] : [];
+        i++;
+        while (i < turn.length) {
+          const nraw = turn[i]!;
+          const nt = nraw.trimStart();
+          if (this.startsWithAny(nt, this.profile.assistantMarkers) || this.startsWithAny(nt, resultMarkers)) break;
+          if (nt !== '' && !/^\s{2,}/.test(nraw)) break; // result continuations are indented
+          if (!this.isChrome(nraw) && nt !== '') resLines.push(this.dedent(nraw));
+          i++;
+        }
+        blocks.push({ kind: 'tool_result', text: resLines.join('\n').trim() });
+        continue;
+      }
+
+      i++;
+    }
+    return blocks;
+  }
+
+  private proseFromBlocks(blocks: TranscriptBlock[]): string | null {
+    const text = blocks
+      .filter((b): b is { kind: 'text'; text: string } => b.kind === 'text')
+      .map((b) => b.text)
+      .join('\n\n')
+      .trim();
     return text.length ? text : null;
+  }
+
+  /** Strip the TUI's 2-space alignment indent from a continuation line. */
+  private dedent(line: string): string {
+    return line.replace(/^ {1,2}/, '').replace(/\s+$/, '');
+  }
+
+  /**
+   * Rejoin paragraphs the TUI hard-wrapped at the terminal width. Claude's TUI
+   * wraps text itself (each row is its own buffer line, not a soft-wrap), so we
+   * reconstruct paragraphs heuristically: a line that fills ~the full width is
+   * treated as a wrap and joined with the next; a short line ends the paragraph.
+   * Code fences, list items, headings, blockquotes, tables and blank lines are
+   * preserved verbatim so we don't mangle structured content.
+   */
+  private reflowText(lines: string[], width: number): string {
+    const collapse = (s: string) => s.replace(/\n{3,}/g, '\n\n').trim();
+    const clean = lines.map((l) => l.replace(/\s+$/, ''));
+    if (!this.reflow) return collapse(clean.join('\n'));
+
+    // Width the TUI wrapped at: terminal columns minus the ~2-space assistant
+    // indent. A line wrapped (vs. ended on a real newline) iff the first word of
+    // the next line would not have fit on it — the exact inverse of word-wrap.
+    const wrapWidth = Math.max(20, width - 2);
+    const isFence = (t: string) => /^```|^~~~/.test(t);
+    // The START of a structural item (new list bullet, heading, quote, table row).
+    // A *continuation* of one is plain prose and gets absorbed below.
+    const isStructStart = (t: string) => /^([-*+•]|\d+[.)]|#{1,6}\s|>|\|)/.test(t);
+
+    const out: string[] = [];
+    let inFence = false;
+    let i = 0;
+    while (i < clean.length) {
+      const line = clean[i]!;
+      const t = line.trim();
+      if (isFence(t)) {
+        inFence = !inFence;
+        out.push(line);
+        i++;
+        continue;
+      }
+      if (inFence) {
+        out.push(line);
+        i++;
+        continue;
+      }
+      if (t === '') {
+        out.push('');
+        i++;
+        continue;
+      }
+      // Start a text unit (prose paragraph OR list item / heading) and absorb the
+      // rows it was force-wrapped across. Stop at a blank, a fence, a NEW
+      // structural item, or a row where the next word would have fit (real break).
+      let para = line;
+      let lastLen = line.length;
+      i++;
+      while (i < clean.length) {
+        const next = clean[i]!;
+        const nt = next.trim();
+        if (nt === '' || isFence(nt) || isStructStart(nt)) break;
+        const firstWord = nt.split(/\s+/)[0] ?? '';
+        if (lastLen + 1 + firstWord.length <= wrapWidth) break;
+        para += ' ' + nt;
+        lastLen = next.length;
+        i++;
+      }
+      out.push(para);
+    }
+    return collapse(out.join('\n'));
   }
 
   /** Clean the full content region to plain text (used for low-confidence fallback). */
   cleanTranscript(snap: ScreenSnapshot, range: { start: number; end: number }): string {
-    return snap.lines
-      .slice(range.start, range.end)
+    return this.logicalLines(snap, range)
       .filter((l) => !this.isChrome(l))
       .join('\n')
       .replace(/\n{3,}/g, '\n\n')

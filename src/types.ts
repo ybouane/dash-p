@@ -21,6 +21,12 @@ export interface TerminalSize {
 export interface ScreenSnapshot {
   /** Full active buffer, top-to-bottom, trailing whitespace trimmed. */
   lines: string[];
+  /**
+   * Per-line soft-wrap flags, parallel to `lines`. `wrapped[i] === true` means
+   * line `i` is a continuation of line `i-1` (the emulator wrapped a long
+   * logical line across rows). Used to rejoin paragraphs during extraction.
+   */
+  wrapped: boolean[];
   /** Just the visible viewport rows (what a human would see right now). */
   viewport: string[];
   /** Cursor position within the viewport (col x, row y). */
@@ -48,13 +54,25 @@ export type EngineState =
   | 'error'
   | 'exited';
 
+/**
+ * A structured piece of the latest assistant turn, reconstructed from the TUI's
+ * rendering: prose (`⏺ text`), a tool invocation (`⏺ Name(args)`), or a tool's
+ * result (`⎿ output`). The SDK layer maps these onto Anthropic content blocks.
+ */
+export type TranscriptBlock =
+  | { kind: 'text'; text: string }
+  | { kind: 'tool_use'; name: string; args: string }
+  | { kind: 'tool_result'; text: string };
+
 /** Output of the recognition layer for a single snapshot. */
 export interface Recognition {
   state: EngineState;
   /** Indices into snapshot.lines that constitute conversation content (chrome excluded). */
   contentRange: { start: number; end: number } | null;
-  /** The latest assistant turn's text, best-effort extracted & unwrapped. */
+  /** The latest assistant turn's prose, best-effort extracted & unwrapped. */
   assistantText: string | null;
+  /** The latest assistant turn parsed into ordered structured blocks. */
+  blocks: TranscriptBlock[];
   /** Present when state === 'tool_permission'. */
   permission?: PermissionPrompt;
   /** Present when state === 'menu'. */

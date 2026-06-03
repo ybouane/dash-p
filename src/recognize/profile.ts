@@ -50,6 +50,13 @@ export interface Profile {
   assistantMarkers: string[];
   /** Marker(s) prefixing an echoed user message. */
   userMarkers: string[];
+  /** How tool calls render in the transcript. */
+  toolUse?: {
+    /** Marker(s) prefixing a tool result line (e.g. "⎿"). */
+    resultMarkers: string[];
+    /** Regex matching an assistant line that is a tool call: "Name(args". */
+    namePattern: string;
+  };
   /** Regex sources; matching lines are dropped as chrome during extraction. */
   chromePatterns: string[];
 }
