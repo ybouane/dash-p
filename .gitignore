@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+fixtures/*.cast
+fixtures/*.frames.txt
+fixtures/spike-*
+!fixtures/.gitkeep
+.dash-p-debug/
+err.log

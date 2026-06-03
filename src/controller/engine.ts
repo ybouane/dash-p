@@ -1,0 +1,396 @@
+/**
+ * Controller — the state machine that drives one or more turns against the TUI.
+ *
+ * Wiring:  PTY ─data→ emulator ─snapshot→ recognizer ─state→ controller
+ *          controller ─keys→ actions ─write→ PTY
+ *
+ * A poll loop snapshots the emulated screen on a fixed cadence, classifies it,
+ * tracks region-masked quiescence, and emits engine events. `send()` runs the
+ * per-turn lifecycle: submit → observe start → wait for settle → extract.
+ */
+import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
+import { PtyTransport } from '../transport/pty.js';
+import { TerminalEmulator } from '../emulation/terminal.js';
+import { Recognizer } from '../recognize/recognizer.js';
+import { loadProfile, type Profile } from '../recognize/profile.js';
+import { QuiescenceTracker, contentSignature } from '../observe/quiescence.js';
+import { Actions } from '../act/actions.js';
+import { KEY } from '../act/keys.js';
+import type {
+  EngineEvent,
+  EngineState,
+  PermissionDecision,
+  PermissionPolicy,
+  Recognition,
+  ScreenSnapshot,
+  TerminalSize,
+} from '../types.js';
+
+export interface EngineOptions {
+  claudePath?: string;
+  claudeArgs?: string[];
+  cwd?: string;
+  size?: TerminalSize;
+  permissionPolicy?: PermissionPolicy;
+  /** Override profile version selection; defaults to detected `claude --version`. */
+  version?: string;
+  /** Quiescence threshold: content must be still this long to count as settled. */
+  quietMs?: number;
+  pollMs?: number;
+  readyTimeoutMs?: number;
+  turnTimeoutMs?: number;
+  /** Auto-accept the workspace-trust dialog at startup (default true). */
+  trustWorkspace?: boolean;
+  /** Called for permission prompts when policy is 'ask'. */
+  onPermission?: (question: string, options: string[]) => Promise<PermissionDecision>;
+  debug?: boolean;
+}
+
+export interface TurnResult {
+  text: string;
+  /** True when extraction had to fall back to a raw transcript dump. */
+  degraded: boolean;
+  confidence: number;
+  durationMs: number;
+}
+
+type Latest = { snapshot: ScreenSnapshot; recognition: Recognition };
+
+export class DashPEngine extends EventEmitter {
+  private readonly opts: Required<Omit<EngineOptions, 'onPermission' | 'version' | 'claudeArgs' | 'cwd'>> &
+    Pick<EngineOptions, 'onPermission' | 'version' | 'claudeArgs' | 'cwd'>;
+  private transport!: PtyTransport;
+  private emulator!: TerminalEmulator;
+  private recognizer!: Recognizer;
+  private actions!: Actions;
+  private profile!: Profile;
+  private readonly quiescence = new QuiescenceTracker();
+
+  private writeChain: Promise<void> = Promise.resolve();
+  private pollTimer: NodeJS.Timeout | null = null;
+  private latest: Latest | null = null;
+  private currentState: EngineState = 'launching';
+  private submitting = false;
+  private turnStarted = false;
+  private lastAssistant = '';
+  private exited = false;
+
+  constructor(options: EngineOptions = {}) {
+    super();
+    this.opts = {
+      claudePath: options.claudePath ?? 'claude',
+      size: options.size ?? { cols: 120, rows: 40 },
+      permissionPolicy: options.permissionPolicy ?? 'ask',
+      quietMs: options.quietMs ?? 700,
+      pollMs: options.pollMs ?? 40,
+      readyTimeoutMs: options.readyTimeoutMs ?? 30_000,
+      turnTimeoutMs: options.turnTimeoutMs ?? 240_000,
+      trustWorkspace: options.trustWorkspace ?? true,
+      debug: options.debug ?? false,
+      onPermission: options.onPermission,
+      version: options.version,
+      claudeArgs: options.claudeArgs,
+      cwd: options.cwd,
+    };
+  }
+
+  emitEvent(e: EngineEvent): void {
+    this.emit('event', e);
+    this.emit(e.type, e);
+  }
+
+  private log(message: string, level: 'debug' | 'info' | 'warn' = 'debug'): void {
+    if (level === 'debug' && !this.opts.debug) return;
+    this.emitEvent({ type: 'log', level, message });
+  }
+
+  /** Spawn Claude in a PTY and wait until the input box is ready. */
+  async start(): Promise<void> {
+    const version = this.opts.version ?? this.detectVersion();
+    this.profile = loadProfile(version);
+    this.recognizer = new Recognizer(this.profile);
+    this.log(`loaded profile for ${this.profile.generatedFor}`, 'info');
+
+    this.transport = new PtyTransport({
+      file: this.opts.claudePath,
+      args: this.opts.claudeArgs ?? [],
+      cwd: this.opts.cwd,
+      size: this.opts.size,
+      // If dash-p itself runs inside Claude Code, don't let the child inherit
+      // nesting markers — it should behave as a fresh top-level session.
+      unsetEnv: [
+        'CLAUDECODE',
+        'CLAUDE_CODE_ENTRYPOINT',
+        'CLAUDE_CODE_SSE_PORT',
+        'CLAUDE_CODE_SESSION',
+        'CLAUDE_CODE_SIMPLE',
+      ],
+    });
+    this.emulator = new TerminalEmulator({
+      size: this.opts.size,
+      onReply: (data) => this.transport.write(data),
+    });
+    this.actions = new Actions(this.transport);
+
+    this.transport.on('data', (data: string) => {
+      this.writeChain = this.writeChain.then(() => this.emulator.write(data)).catch(() => {});
+    });
+    this.transport.on('exit', (code: number | null, signal: number | null) => {
+      this.exited = true;
+      this.emitEvent({ type: 'exit', code, signal });
+    });
+
+    this.transport.start();
+    this.startPolling();
+    await this.waitUntilReady();
+    this.log('TUI ready', 'info');
+  }
+
+  /**
+   * Wait for the input box, auto-clearing startup gates on the way — currently
+   * the workspace-trust dialog (whose affirmative option is pre-highlighted, so
+   * Enter accepts it). Mimics `-p`, which skips the trust prompt in chosen dirs.
+   */
+  private async waitUntilReady(): Promise<void> {
+    const triggers = this.profile.startup?.trustTriggers ?? [];
+    const start = Date.now();
+    let acceptedTrust = false;
+    while (this.currentState !== 'ready') {
+      if (this.exited) throw new Error('engine exited before becoming ready');
+      if (Date.now() - start > this.opts.readyTimeoutMs) throw new Error('timed out waiting for ready');
+
+      const snap = this.latest?.snapshot;
+      if (!acceptedTrust && this.opts.trustWorkspace && snap && triggers.length) {
+        const flat = snap.lines.join('\n');
+        if (triggers.some((t) => flat.includes(t))) {
+          this.log('workspace-trust dialog → accepting (Enter)', 'info');
+          this.actions.enter();
+          acceptedTrust = true;
+          await delay(this.opts.pollMs * 5);
+          continue;
+        }
+      }
+      await delay(this.opts.pollMs);
+    }
+  }
+
+  private detectVersion(): string {
+    try {
+      const out = execFileSync(this.opts.claudePath, ['--version'], { encoding: 'utf8' });
+      // "2.1.119 (Claude Code)" -> "2.1.119"
+      return out.trim().split(/\s+/)[0] ?? 'default';
+    } catch {
+      return 'default';
+    }
+  }
+
+  private startPolling(): void {
+    this.pollTimer = setInterval(() => this.poll(), this.opts.pollMs);
+  }
+
+  private poll(): void {
+    if (!this.emulator) return;
+    const snapshot = this.emulator.snapshot();
+    const recognition = this.recognizer.recognize(snapshot);
+    this.latest = { snapshot, recognition };
+
+    // Quiescence on masked content.
+    const sig = contentSignature(snapshot, this.profile, recognition.contentRange ?? { start: 0, end: snapshot.lines.length });
+    this.quiescence.update(sig);
+
+    // Emit streaming deltas (best-effort clean appends).
+    if (recognition.assistantText && recognition.assistantText !== this.lastAssistant) {
+      if (recognition.assistantText.startsWith(this.lastAssistant)) {
+        const delta = recognition.assistantText.slice(this.lastAssistant.length);
+        if (delta) this.emitEvent({ type: 'delta', text: delta });
+      }
+      this.lastAssistant = recognition.assistantText;
+    }
+
+    // Map recognizer state to engine state, honouring the submit window.
+    let next = recognition.state;
+    if (this.submitting && (next === 'ready')) next = 'submitting';
+    if (next !== this.currentState) {
+      const prev = this.currentState;
+      this.currentState = next;
+      this.emitEvent({ type: 'state', state: next, prev });
+      if (next === 'thinking' || next === 'streaming') {
+        this.submitting = false;
+        this.turnStarted = true;
+      }
+      if (next === 'tool_permission' && recognition.permission) {
+        this.emitEvent({ type: 'permission', prompt: recognition.permission });
+      }
+      if (next === 'menu' && recognition.menu) {
+        this.emitEvent({ type: 'menu', prompt: recognition.menu });
+      }
+    }
+
+    this.emitEvent({ type: 'snapshot', snapshot, recognition });
+  }
+
+  /** Submit a prompt and resolve when the turn settles. */
+  async send(prompt: string): Promise<TurnResult> {
+    if (this.exited) throw new Error('engine has exited');
+    await this.waitForState((s) => s === 'ready', this.opts.readyTimeoutMs, 'ready (pre-send)');
+
+    const startedAt = Date.now();
+    this.lastAssistant = '';
+    this.turnStarted = false;
+    this.submitting = true;
+    this.quiescence.reset();
+
+    // Inject: paste (atomic, popup-free), let the TUI ingest it, then Enter.
+    this.actions.paste(prompt);
+    await delay(120);
+    this.actions.enter();
+    this.emitEvent({ type: 'state', state: 'submitting', prev: this.currentState });
+
+    await this.runTurnLoop(startedAt);
+
+    const rec = this.latest?.recognition;
+    let text = rec?.assistantText ?? '';
+    let degraded = false;
+    if (!text || (rec && rec.confidence < 0.5)) {
+      // Fallback: dump the cleaned transcript rather than crash or lie.
+      if (this.latest) {
+        text = this.recognizer.cleanTranscript(
+          this.latest.snapshot,
+          this.latest.recognition.contentRange ?? { start: 0, end: this.latest.snapshot.lines.length },
+        );
+        degraded = true;
+        this.log('extraction confidence low — fell back to raw transcript', 'warn');
+      }
+    }
+
+    const result: TurnResult = {
+      text,
+      degraded,
+      confidence: rec?.confidence ?? 0,
+      durationMs: Date.now() - startedAt,
+    };
+    this.emitEvent({ type: 'turn-complete', text });
+    return result;
+  }
+
+  private async runTurnLoop(startedAt: number): Promise<void> {
+    let sawStart = false;
+    while (true) {
+      if (this.exited) return;
+      if (Date.now() - startedAt > this.opts.turnTimeoutMs) {
+        this.log('turn timed out', 'warn');
+        return;
+      }
+      const rec = this.latest?.recognition;
+      const state = this.currentState;
+
+      // Handle interactive prompts mid-turn.
+      if (state === 'tool_permission' && rec?.permission) {
+        await this.handlePermission(rec.permission.question, rec.permission.options, rec.permission.defaultIndex);
+        await delay(this.opts.pollMs * 3);
+        continue;
+      }
+
+      if (state === 'thinking' || state === 'streaming') {
+        sawStart = true;
+      }
+
+      // Completion: the model started, the box is back to ready, and the
+      // masked content has been still long enough.
+      const backToReady = state === 'ready' || state === 'complete';
+      if (sawStart && backToReady && this.quiescence.isStable(this.opts.quietMs)) {
+        return;
+      }
+
+      // Robustness: if we never detected an explicit "busy" (mis-calibrated
+      // busy markers) but assistant text appeared and then stabilised, accept it.
+      if (!sawStart && this.lastAssistant && backToReady && this.quiescence.isStable(this.opts.quietMs * 2)) {
+        this.log('completed without an explicit busy signal (check busyMarkers)', 'warn');
+        return;
+      }
+
+      await delay(this.opts.pollMs);
+    }
+  }
+
+  private async handlePermission(question: string, options: string[], defaultIndex: number | null): Promise<void> {
+    let action: PermissionDecision['action'];
+    switch (this.opts.permissionPolicy) {
+      case 'allow':
+        action = 'allow';
+        break;
+      case 'deny':
+        action = 'deny';
+        break;
+      default: {
+        if (this.opts.onPermission) {
+          action = (await this.opts.onPermission(question, options)).action;
+        } else {
+          action = 'deny'; // cautious default when nobody is listening
+        }
+      }
+    }
+    this.log(`permission "${question}" -> ${action}`, 'info');
+    if (action === 'allow') {
+      // Affirmative option is usually the highlighted default → Enter.
+      this.actions.enter();
+    } else if (action === 'deny') {
+      this.actions.press(KEY.ESC);
+    } else {
+      this.actions.interrupt();
+    }
+  }
+
+  async interrupt(): Promise<void> {
+    this.actions?.interrupt();
+    await delay(50);
+  }
+
+  private async waitForState(
+    pred: (s: EngineState) => boolean,
+    timeoutMs: number,
+    label: string,
+  ): Promise<void> {
+    const start = Date.now();
+    while (!pred(this.currentState)) {
+      if (this.exited) throw new Error(`engine exited while waiting for ${label}`);
+      if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${label}`);
+      await delay(this.opts.pollMs);
+    }
+  }
+
+  get state(): EngineState {
+    return this.currentState;
+  }
+
+  /** Change how mid-turn permission prompts are handled (used by SDK setPermissionMode). */
+  setPermissionPolicy(policy: PermissionPolicy): void {
+    this.opts.permissionPolicy = policy;
+  }
+
+  get currentProfile(): Profile {
+    return this.profile;
+  }
+
+  snapshot(): ScreenSnapshot | null {
+    return this.latest?.snapshot ?? null;
+  }
+
+  async stop(): Promise<void> {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = null;
+    try {
+      this.transport?.write(KEY.CTRL_C);
+      await delay(40);
+    } catch {
+      /* ignore */
+    }
+    this.transport?.kill();
+    this.emulator?.dispose();
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}

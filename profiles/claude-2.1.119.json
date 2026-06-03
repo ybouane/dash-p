@@ -1,0 +1,59 @@
+{
+  "generatedFor": "2.1.119 (Claude Code)",
+  "_note": "Calibrated against the real TUI via probes/capture.ts. The input prompt marker is ❯ and the input box is delimited by full-width ─ rules (not a box). The welcome banner uses ╭╮╰╯│. Footer idle marker is '? for shortcuts'. Avoid · and * as spinner glyphs — they appear in the footer.",
+  "inputBox": {
+    "borderGlyphs": ["╭", "╮", "╰", "╯", "│", "─"],
+    "promptMarkers": ["❯", "> ", "│ >"],
+    "placeholders": ["Try \"", "? for shortcuts", "for shortcuts"]
+  },
+  "busyMarkers": [
+    "esc to interrupt",
+    "Esc to interrupt",
+    "esc to stop",
+    "ctrl+c to stop",
+    "(esc to interrupt)",
+    "tokens",
+    "Thinking",
+    "Brewing",
+    "Pondering"
+  ],
+  "idleMarkers": ["? for shortcuts"],
+  "spinnerGlyphs": [
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+    "✻", "✽", "✶", "✳", "✺", "✹", "✢", "·"
+  ],
+  "permission": {
+    "triggers": [
+      "Do you want to proceed",
+      "Do you want to",
+      "Allow this",
+      "wants to",
+      "Permission required"
+    ],
+    "affirmative": ["Yes", "Yes, ", "Allow", "Proceed"],
+    "negative": ["No", "No, ", "Deny", "Cancel", "Reject"]
+  },
+  "menu": {
+    "selectedMarkers": ["❯", "▶"],
+    "optionMarkers": ["○", "◯"]
+  },
+  "startup": {
+    "trustTriggers": ["trust this folder", "Is this a project you", "Quick safety check"]
+  },
+  "assistantMarkers": ["⏺", "●"],
+  "userMarkers": ["> ", "❯ "],
+  "chromePatterns": [
+    "^\\s*[╭╮╰╯│].*$",
+    "^\\s*─+\\s*$",
+    "^\\s*❯\\s*$",
+    "^\\s*[✻✽✶✳✺✹✢⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*$",
+    "for shortcuts",
+    "esc to interrupt",
+    "/effort",
+    "/ide for",
+    "for agents",
+    "Opus 4.8 is here",
+    "Welcome back",
+    "^\\s*$"
+  ]
+}

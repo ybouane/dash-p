@@ -1,0 +1,37 @@
+{
+  "name": "dash-p",
+  "version": "0.1.0",
+  "description": "Drive the Claude Code TUI programmatically — a -p-style CLI and an Agent-SDK-shaped query() API, powered by terminal automation instead of the headless protocol.",
+  "type": "module",
+  "bin": {
+    "dash-p": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli/index.ts",
+    "dash-p": "tsx src/cli/index.ts",
+    "probe": "tsx probes/capture.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "postinstall": "node scripts/fix-node-pty.mjs"
+  },
+  "dependencies": {
+    "@xterm/headless": "^5.5.0",
+    "commander": "^12.1.0",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.161",
+    "@types/node": "^20.19.41",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
