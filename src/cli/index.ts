@@ -25,6 +25,14 @@ interface CliOpts {
   quietMs?: number;
   claudePath?: string;
   reflow?: boolean;
+  verbose?: boolean;
+  jsonSchema?: string;
+  mcpConfig?: string[];
+  betas?: string[];
+  settings?: string;
+  settingSources?: string;
+  verifySession?: boolean;
+  enrichFromSession?: boolean;
   debug?: boolean;
   dangerouslySkipPermissions?: boolean;
 }
@@ -48,6 +56,14 @@ program
   .option('--quiet-ms <n>', 'quiescence threshold in ms', (v) => parseInt(v, 10))
   .option('--claude-path <path>', 'path to the claude binary', 'claude')
   .option('--no-reflow', "keep the screen's literal line breaks (don't rejoin wrapped paragraphs)")
+  .option('--no-verbose', "don't launch the TUI with --verbose (tool output may collapse)")
+  .option('--json-schema <json>', 'JSON Schema for structured output (fills structured_output)')
+  .option('--mcp-config <configs...>', 'MCP server JSON config files or strings')
+  .option('--betas <betas...>', 'beta header names')
+  .option('--settings <file-or-json>', 'settings file path or inline JSON')
+  .option('--setting-sources <list>', 'comma-separated: user,project,local')
+  .option('--verify-session', 'cross-check scraped output against the on-disk session JSONL')
+  .option('--enrich-from-session', 'fill exact usage from the on-disk session JSONL (read-only)')
   .option('--dangerously-skip-permissions', 'run with --permission-mode bypassPermissions')
   .option('--debug', 'print engine logs to stderr')
   .action(async (promptArg: string | undefined, opts: CliOpts) => {
@@ -73,6 +89,14 @@ program
       terminalSize: opts.cols && opts.rows ? { cols: opts.cols, rows: opts.rows } : undefined,
       quietMs: opts.quietMs,
       reflow: opts.reflow,
+      verbose: opts.verbose,
+      mcpServers: opts.mcpConfig,
+      betas: opts.betas,
+      settings: opts.settings,
+      settingSources: opts.settingSources,
+      jsonSchema: opts.jsonSchema ? safeJson(opts.jsonSchema) : undefined,
+      verifySession: opts.verifySession,
+      enrichFromSession: opts.enrichFromSession,
       includePartialMessages: opts.outputFormat === 'stream-json',
       debug: opts.debug,
     };
@@ -117,6 +141,15 @@ program.parseAsync(process.argv);
 
 function emitJsonLine(msg: SDKMessage): void {
   process.stdout.write(JSON.stringify(msg) + '\n');
+}
+
+function safeJson(s: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    process.stderr.write('dash-p: --json-schema is not valid JSON, ignoring\n');
+    return undefined;
+  }
 }
 
 function readStdin(): Promise<string> {
