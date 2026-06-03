@@ -93,9 +93,17 @@ local experiment on your own account, and the sanctioned SDK exists anyway.
 
 ## Known limitations
 
-- Tool `tool_use`/`tool_result` aren't yet parsed into structured blocks (tool
-  activity is folded into the assistant text).
-- Soft-wrapped long paragraphs are joined at terminal width (no wrap-flag
-  rejoin yet — would require surfacing xterm's `isWrapped`).
-- Output beyond the scrollback window isn't incrementally captured.
-- `setModel()` mid-session is a no-op (pass `options.model` at query time).
+- Tool `input` is the **rendered** args string (`{ raw }`), not the model's JSON,
+  and the TUI may width-truncate long args/results — a screen-scraping ceiling.
+- **Reflow is heuristic.** Claude's TUI hard-wraps text itself (each row is its
+  own buffer line, `isWrapped` is false), so we can't rely on the terminal's
+  soft-wrap flag. Instead we rejoin paragraphs with the inverse of word-wrap: a
+  row is a wrap (not a real break) iff the first word of the next row would not
+  have fit on it. Code fences, lists, headings, quotes, and tables are preserved.
+  A real break landing exactly at the wrap width can still be misjoined; use
+  `reflow: false` for verbatim line breaks.
+- Output is bounded by the emulator scrollback (100k lines); streamed-delta
+  accumulation keeps the prose result complete even past that, but structured
+  tool blocks are bounded by what's still on-screen.
+- `setModel()` mid-session is best-effort via the `/model` command (the TUI may
+  open a picker for some inputs); prefer `options.model` at query time.

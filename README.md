@@ -135,12 +135,17 @@ npm run probe -- "Reply with exactly: hello"   # capture real frames → fixture
 
 ## Status & limitations
 
-✅ Working: one-shot + streaming turns, `text`/`json`/`stream-json`, model
-selection, workspace-trust auto-accept, clean extraction, confidence scoring.
+✅ Working (validated against the live 2.1.x TUI): one-shot + streaming turns,
+`text`/`json`/`stream-json`, model selection, workspace-trust auto-accept,
+**structured `tool_use`/`tool_result` blocks**, **paragraph reflow** (rejoining
+the TUI's hard-wrapped lines, code/list-aware), streamed-delta accumulation,
+`onPermission` handling, clean extraction, confidence scoring + degraded
+fallback.
 
-⚠️ Partial / TODO: structured tool_use/tool_result blocks (tool activity is
-currently folded into text), soft-wrap rejoining of long paragraphs, multi-turn
-permission flows, output beyond the scrollback window. See
+⚠️ Fidelity ceilings (inherent to screen-scraping): tool `input` is the
+*rendered* args string (`{ raw }`), not the model's JSON, and may be
+width-truncated; reflow is heuristic (`--no-reflow` for verbatim breaks); MCP
+servers, hooks, and the `canUseTool` callback aren't wired. See
 [docs/SDK-PARITY.md](docs/SDK-PARITY.md).
 
 This is a research experiment, not a supported product. Use your own account;
