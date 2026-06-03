@@ -13,6 +13,7 @@ import type {
   Recognition,
   ScreenSnapshot,
   TranscriptBlock,
+  TurnMetrics,
 } from '../types.js';
 import type { Profile } from './profile.js';
 
@@ -100,6 +101,8 @@ export class Recognizer {
     };
     if (permission) rec.permission = permission;
     if (menu) rec.menu = menu;
+    const metrics = this.scrapeMetrics(snap.viewport);
+    if (metrics) rec.metrics = metrics;
     return rec;
   }
 
@@ -289,13 +292,38 @@ export class Recognizer {
           if (!this.isChrome(nraw) && nt !== '') resLines.push(this.dedent(nraw));
           i++;
         }
-        blocks.push({ kind: 'tool_result', text: resLines.join('\n').trim() });
+        const resText = resLines.join('\n').trim();
+        const errMarkers = this.profile.toolUse?.errorMarkers ?? [];
+        const isError = errMarkers.some((mk) => resText.includes(mk));
+        blocks.push(isError ? { kind: 'tool_result', text: resText, isError: true } : { kind: 'tool_result', text: resText });
         continue;
       }
 
       i++;
     }
     return blocks;
+  }
+
+  /** Scrape live token/duration metrics from the footer/status region. */
+  private scrapeMetrics(viewport: string[]): TurnMetrics | undefined {
+    const m = this.profile.metrics;
+    if (!m) return undefined;
+    const text = viewport.join('\n');
+    const num = (src: string | undefined): number | undefined => {
+      if (!src) return undefined;
+      const match = text.match(new RegExp(src));
+      if (!match || !match[1]) return undefined;
+      const n = parseInt(match[1].replace(/,/g, ''), 10);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const out: TurnMetrics = {};
+    const o = num(m.outputTokens);
+    const c = num(m.contextTokens);
+    const d = num(m.durationSeconds);
+    if (o !== undefined) out.outputTokens = o;
+    if (c !== undefined) out.contextTokens = c;
+    if (d !== undefined) out.durationSec = d;
+    return Object.keys(out).length ? out : undefined;
   }
 
   private proseFromBlocks(blocks: TranscriptBlock[]): string | null {

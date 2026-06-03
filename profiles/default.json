@@ -44,7 +44,13 @@
   "userMarkers": ["> ", "❯ "],
   "toolUse": {
     "resultMarkers": ["⎿"],
-    "namePattern": "^([A-Za-z][A-Za-z0-9_]*)\\((.*)$"
+    "namePattern": "^([A-Za-z][A-Za-z0-9_]*)\\((.*)$",
+    "errorMarkers": ["Error", "error:", "failed", "No such file", "command not found", "Permission denied"]
+  },
+  "metrics": {
+    "outputTokens": "↓\\s*([0-9,]+)\\s*tokens",
+    "contextTokens": "interrupt\\s+([0-9,]+)\\s*tokens",
+    "durationSeconds": "\\(([0-9]+)s"
   },
   "chromePatterns": [
     "^\\s*[╭╮╰╯│].*$",

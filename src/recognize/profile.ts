@@ -56,6 +56,17 @@ export interface Profile {
     resultMarkers: string[];
     /** Regex matching an assistant line that is a tool call: "Name(args". */
     namePattern: string;
+    /** Substrings that mark a tool result as an error (best-effort). */
+    errorMarkers?: string[];
+  };
+  /** Regex sources (with a capture group) for scraping live metrics from the footer. */
+  metrics?: {
+    /** Output tokens generated this turn, e.g. "↓ 51 tokens". */
+    outputTokens?: string;
+    /** Context/total tokens shown on the busy footer, e.g. "20341 tokens". */
+    contextTokens?: string;
+    /** Elapsed seconds shown in the status line, e.g. "(2s · …)". */
+    durationSeconds?: string;
   };
   /** Regex sources; matching lines are dropped as chrome during extraction. */
   chromePatterns: string[];

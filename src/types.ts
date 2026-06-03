@@ -62,7 +62,17 @@ export type EngineState =
 export type TranscriptBlock =
   | { kind: 'text'; text: string }
   | { kind: 'tool_use'; name: string; args: string }
-  | { kind: 'tool_result'; text: string };
+  | { kind: 'tool_result'; text: string; isError?: boolean };
+
+/** Live metrics scraped from the footer/status line during a turn. */
+export interface TurnMetrics {
+  /** Output tokens generated this turn (from "↓ N tokens"). */
+  outputTokens?: number;
+  /** Context/total tokens (from the busy footer). */
+  contextTokens?: number;
+  /** Elapsed seconds shown in the status line. */
+  durationSec?: number;
+}
 
 /** Output of the recognition layer for a single snapshot. */
 export interface Recognition {
@@ -73,6 +83,8 @@ export interface Recognition {
   assistantText: string | null;
   /** The latest assistant turn parsed into ordered structured blocks. */
   blocks: TranscriptBlock[];
+  /** Live metrics scraped from the footer this snapshot (if any). */
+  metrics?: TurnMetrics;
   /** Present when state === 'tool_permission'. */
   permission?: PermissionPrompt;
   /** Present when state === 'menu'. */
