@@ -1,3 +1,9 @@
+<sub>*Follow me on X [@ybouane](https://x.com/ybouane) — I'm building in public.*</sub>
+
+<p align="center">
+  <img src="banner.png" alt="dash-p — make Claude scriptable again" width="640">
+</p>
+
 # Make Claude Scriptable Again
 
 ### `dash-p`
@@ -25,6 +31,7 @@ Not a replacement for Claude Code.
 
 A bridge that makes it scriptable.
 
+
 ---
 
 ## Use it in one line
@@ -49,19 +56,33 @@ That’s the whole idea. Same prompt in, same shape of answer out — but produc
 
 ## Getting started
 
-**Prerequisites:** Node ≥ 20, and the official `claude` CLI installed and logged in (run `claude` once to sign in). On macOS you’ll need Xcode Command Line Tools (for the PTY build).
+**Prerequisite:** the official **`claude` CLI**, installed and logged in — run `claude` once interactively to sign in. dash-p drives that binary; it does not bundle or replace it. (Also: Node ≥ 20. node-pty installs a prebuilt binary on common platforms; if yours needs compiling you’ll want a C++ toolchain — macOS `xcode-select --install`, Debian/Ubuntu `apt install build-essential python3`.)
+
+**CLI — install globally:**
 
 ```bash
-git clone <this-repo> dash-p && cd dash-p
-npm install        # builds the PTY layer
-npm run build      # compile to dist/
-npm link           # puts `dash-p` on your PATH
+npm install -g dash-p
 
-dash-p "what does this project do?"
+dash-p "what color is the sky"
 ```
 
-Prefer not to link? Run straight from source: `npx tsx src/cli/index.ts "your prompt"`.
-If `claude` isn’t on your `PATH`, pass `--claude-path /abs/path/to/claude`.
+That puts a `dash-p` command on your `PATH`. Verify with `which dash-p`. If `claude` isn’t on your `PATH`, pass `--claude-path /abs/path/to/claude`.
+
+**SDK — add to a project:**
+
+```bash
+npm install dash-p
+```
+
+```ts
+import { query } from "dash-p";
+```
+
+**No install:**
+
+```bash
+npx dash-p "what color is the sky"
+```
 
 ---
 
