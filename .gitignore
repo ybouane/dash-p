@@ -5,6 +5,7 @@ dist/
 fixtures/*.cast
 fixtures/*.frames.txt
 fixtures/spike-*
+fixtures/attrs-*
 !fixtures/.gitkeep
 .dash-p-debug/
 err.log
