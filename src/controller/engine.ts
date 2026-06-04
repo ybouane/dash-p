@@ -104,7 +104,7 @@ export class DashPEngine extends EventEmitter {
       permissionPolicy: options.permissionPolicy ?? 'ask',
       quietMs: options.quietMs ?? 700,
       pollMs: options.pollMs ?? 40,
-      readyTimeoutMs: options.readyTimeoutMs ?? 30_000,
+      readyTimeoutMs: options.readyTimeoutMs ?? 60_000,
       turnTimeoutMs: options.turnTimeoutMs ?? 240_000,
       trustWorkspace: options.trustWorkspace ?? true,
       reflow: options.reflow ?? true,
@@ -179,7 +179,12 @@ export class DashPEngine extends EventEmitter {
     let acceptedTrust = false;
     while (this.currentState !== 'ready') {
       if (this.exited) throw new Error('engine exited before becoming ready');
-      if (Date.now() - start > this.opts.readyTimeoutMs) throw new Error('timed out waiting for ready');
+      if (Date.now() - start > this.opts.readyTimeoutMs) {
+        throw new Error(
+          `timed out after ${Math.round(this.opts.readyTimeoutMs / 1000)}s waiting for the input box. ` +
+            this.describeScreen(),
+        );
+      }
 
       const snap = this.latest?.snapshot;
       if (!acceptedTrust && this.opts.trustWorkspace && snap && triggers.length) {
@@ -194,6 +199,18 @@ export class DashPEngine extends EventEmitter {
       }
       await delay(this.opts.pollMs);
     }
+  }
+
+  /** Human-readable snapshot of where the engine is stuck, for error messages. */
+  private describeScreen(): string {
+    const rec = this.latest?.recognition;
+    const snap = this.latest?.snapshot;
+    if (!snap) {
+      return 'The TUI produced no output at all — check that the `claude` binary launches and is logged in (run `claude` once interactively).';
+    }
+    const lines = snap.viewport.map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim() !== '');
+    const tail = lines.slice(-14).join('\n');
+    return `Last state=${rec?.state ?? '?'} confidence=${rec?.confidence?.toFixed(2) ?? '?'}. On screen:\n${tail || '(blank)'}`;
   }
 
   private detectVersion(): string {
@@ -422,7 +439,7 @@ export class DashPEngine extends EventEmitter {
     const start = Date.now();
     while (!pred(this.currentState)) {
       if (this.exited) throw new Error(`engine exited while waiting for ${label}`);
-      if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${label}`);
+      if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${label}. ${this.describeScreen()}`);
       await delay(this.opts.pollMs);
     }
   }
