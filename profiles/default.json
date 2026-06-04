@@ -4,7 +4,7 @@
   "inputBox": {
     "borderGlyphs": ["╭", "╮", "╰", "╯", "│", "─"],
     "promptMarkers": ["❯", "> ", "│ >"],
-    "placeholders": ["Try \"", "? for shortcuts", "for shortcuts"]
+    "placeholders": ["Try \"", "? for shortcuts", "for shortcuts", "⧉"]
   },
   "busyMarkers": [
     "esc to interrupt",
@@ -59,6 +59,8 @@
     "^\\s*[✻✽✶✳✺✹✢⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*$",
     "for shortcuts",
     "esc to interrupt",
+    "⧉ In ",
+    "⧉",
     "/effort",
     "/ide for",
     "for agents",
