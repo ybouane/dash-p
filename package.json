@@ -12,13 +12,19 @@
       "import": "./dist/sdk/index.js"
     }
   },
+  "files": [
+    "dist",
+    "profiles",
+    "scripts/fix-node-pty.mjs"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli/index.ts",
     "dash-p": "tsx src/cli/index.ts",
     "probe": "tsx probes/capture.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "postinstall": "node scripts/fix-node-pty.mjs"
+    "postinstall": "node scripts/fix-node-pty.mjs",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@xterm/headless": "^5.5.0",
