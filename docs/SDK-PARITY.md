@@ -33,12 +33,25 @@ screen, so long args can be width-truncated. **`--verbose` is launched by defaul
 so tool *results* aren't collapsed. For the model's exact tool input JSON and full
 results, use `enrichFromSession` (reads the session JSONL — see below).
 
-### Metrics & usage
+### Result shape & usage
 
-`ttft_ms` and `duration_api_ms` come from timing + the footer timer. `usage` is
-scraped (`output_tokens` from the footer's `↓ N tokens`) with `usage_source:
-'scraped'`, or **exact** (`input`/`output`/cache tokens) with `usage_source:
-'session'` when `enrichFromSession` is on.
+The `result` message mirrors `claude -p --output-format json`'s field order and
+includes `is_error`, `api_error_status: null`, `duration_ms`, `duration_api_ms`,
+`ttft_ms`, `num_turns`, `result`, `stop_reason`, `session_id`,
+`total_cost_usd`, `usage`, `permission_denials`, `terminal_reason`, `uuid` — plus
+dash-p extras (`degraded`, `confidence`, `usage_source`).
+
+| Field | scraped (default) | `--enrich-from-session` |
+|---|---|---|
+| `ttft_ms`, `duration_api_ms` | timing + footer timer | same |
+| `usage` | approximate (`output_tokens` from the footer's `↓ N tokens`, `input_tokens: 0`) | **exact, full rich shape** (cache tokens, `service_tier`, `cache_creation`, `iterations`, …) from the JSONL |
+| `stop_reason` | assumed `end_turn` | exact (from the JSONL) |
+| `usage_source` | `'scraped'` | `'session'` |
+
+**Not recoverable** (the CLI computes them post-hoc from pricing; they're not in
+the transcript): `total_cost_usd` and `modelUsage` cost figures → `total_cost_usd`
+is `null`, `modelUsage` is omitted. For exact usage and cost-grade accuracy, the
+sanctioned `claude -p` remains the source of truth.
 
 ## Options
 

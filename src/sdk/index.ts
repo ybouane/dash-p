@@ -49,6 +49,17 @@ export function query(params: { prompt: string | AsyncIterable<SDKUserMessage>; 
 
   const queue = new AsyncQueue<SDKMessage>();
 
+  // With debug on, stream the engine's log + state transitions to stderr so a
+  // stuck startup (a gate, a slow cold start) is visible instead of opaque.
+  if (options.debug) {
+    engine.on('log', (e: { type: 'log'; level: string; message: string }) =>
+      process.stderr.write(`dash-p[${e.level}] ${e.message}\n`),
+    );
+    engine.on('state', (e: { type: 'state'; prev: string; state: string }) =>
+      process.stderr.write(`dash-p[state] ${e.prev} → ${e.state}\n`),
+    );
+  }
+
   // Stream token deltas as partial messages when asked.
   if (options.includePartialMessages) {
     engine.on('delta', (e: { type: 'delta'; text: string }) => {
@@ -99,21 +110,27 @@ export function query(params: { prompt: string | AsyncIterable<SDKUserMessage>; 
         queue.push(assistant);
         if (toolResults) queue.push(toolResults);
 
+        // Field order mirrors `claude -p --output-format json` for clean diffs.
         const result: SDKResultSuccess = {
           type: 'result',
           subtype: 'success',
+          is_error: false,
+          api_error_status: null,
           duration_ms: res.durationMs,
           duration_api_ms: res.metrics?.durationSec ? res.metrics.durationSec * 1000 : res.durationMs,
           ttft_ms: res.ttftMs,
-          is_error: false,
           num_turns: turns,
           result: res.text,
+          stop_reason: res.degraded ? null : 'end_turn',
           session_id: sessionId,
+          total_cost_usd: null, // not in the transcript; the CLI computes it from pricing
+          permission_denials: [],
+          terminal_reason: 'completed',
           uuid: randomUUID(),
           degraded: res.degraded,
           confidence: res.confidence,
         };
-        // Scraped usage (output tokens from the footer).
+        // Scraped usage (output tokens from the footer — approximate).
         if (res.metrics?.outputTokens !== undefined) {
           result.usage = { input_tokens: 0, output_tokens: res.metrics.outputTokens };
           result.usage_source = 'scraped';
@@ -267,8 +284,11 @@ function applySessionData(
       // which the rendered-then-scraped text can't fully preserve. Opting into
       // enrichment means you want that exact form.
       if (turn.text) result.result = turn.text;
-      result.usage = turn.usage;
+      // Exact usage: the rich shape from the final message, with summed token
+      // counts overlaid (matches `claude -p` for single-turn; close for tools).
+      result.usage = { ...(turn.rawUsage ?? {}), ...turn.usage } as typeof result.usage;
       result.usage_source = 'session';
+      if (turn.stopReason) result.stop_reason = turn.stopReason;
     }
   }
 }

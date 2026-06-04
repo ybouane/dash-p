@@ -27,8 +27,12 @@ export interface SessionTurn {
   text: string;
   /** Ordered content blocks across the turn (text / tool_use / tool_result / thinking). */
   blocks: SessionBlock[];
-  /** Summed usage across the turn's assistant messages. */
+  /** Summed token counts across the turn's assistant messages. */
   usage: SessionUsage;
+  /** The final assistant message's full usage object (rich shape: service_tier, cache_creation, …). */
+  rawUsage?: Record<string, unknown>;
+  /** Stop reason of the final assistant message (e.g. 'end_turn'). */
+  stopReason?: string;
   model?: string;
 }
 
@@ -95,10 +99,14 @@ export function readLatestTurn(file: string): SessionTurn | null {
   const blocks: SessionBlock[] = [];
   const usage: SessionUsage = { input_tokens: 0, output_tokens: 0 };
   let model: string | undefined;
+  let rawUsage: Record<string, unknown> | undefined;
+  let stopReason: string | undefined;
 
   for (const e of slice) {
     if (e.type !== 'assistant' && e.type !== 'user') continue;
-    const msg = e.message as { content?: unknown; model?: string; usage?: Record<string, number> } | undefined;
+    const msg = e.message as
+      | { content?: unknown; model?: string; usage?: Record<string, number>; stop_reason?: string }
+      | undefined;
     if (!msg) continue;
     if (typeof msg.model === 'string') model = msg.model;
     if (e.type === 'assistant' && msg.usage) {
@@ -106,6 +114,8 @@ export function readLatestTurn(file: string): SessionTurn | null {
       usage.output_tokens += msg.usage.output_tokens ?? 0;
       if (msg.usage.cache_read_input_tokens) usage.cache_read_input_tokens = (usage.cache_read_input_tokens ?? 0) + msg.usage.cache_read_input_tokens;
       if (msg.usage.cache_creation_input_tokens) usage.cache_creation_input_tokens = (usage.cache_creation_input_tokens ?? 0) + msg.usage.cache_creation_input_tokens;
+      rawUsage = msg.usage; // keep the latest rich usage object
+      if (typeof msg.stop_reason === 'string') stopReason = msg.stop_reason;
     }
     const content = msg.content;
     if (typeof content === 'string') {
@@ -123,7 +133,7 @@ export function readLatestTurn(file: string): SessionTurn | null {
     .map((b) => b.text)
     .join('\n\n')
     .trim();
-  return { text, blocks, usage, model };
+  return { text, blocks, usage, rawUsage, stopReason, model };
 }
 
 /** Compare scraped text to the session's ground-truth final text. */

@@ -83,28 +83,37 @@ export interface Usage {
   output_tokens: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  /** Rich passthrough fields (service_tier, cache_creation, …) when enriched. */
+  [k: string]: unknown;
 }
 
 export interface SDKResultSuccess {
   type: 'result';
   subtype: 'success';
+  is_error: false;
+  /** Always null — we have no API-level error channel from the TUI. */
+  api_error_status?: number | null;
   duration_ms: number;
   duration_api_ms: number;
   ttft_ms?: number;
-  is_error: false;
   num_turns: number;
   result: string;
+  /** 'end_turn' on a clean finish; exact value from the session when enriched. */
+  stop_reason?: string | null;
+  session_id: string;
+  /** Not in the transcript (the CLI computes it from pricing) → null. */
+  total_cost_usd?: number | null;
+  usage?: Usage;
+  permission_denials?: unknown[];
+  terminal_reason?: string;
+  uuid: UUID;
   /** Present when a `jsonSchema` was supplied and the answer parsed as JSON. */
   structured_output?: unknown;
-  usage?: Usage;
-  total_cost_usd?: number;
-  session_id: string;
-  uuid: UUID;
   /** dash-p extension: true when extraction fell back to a raw transcript. */
   degraded?: boolean;
   /** dash-p extension: recognizer confidence for this turn (0..1). */
   confidence?: number;
-  /** dash-p extension: 'scraped' or 'session' (enriched from the JSONL). */
+  /** dash-p extension: 'scraped' (footer) or 'session' (exact, from the JSONL). */
   usage_source?: 'scraped' | 'session';
 }
 
