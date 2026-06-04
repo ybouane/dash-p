@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "Drive the Claude Code TUI programmatically — a -p-style CLI and an Agent-SDK-shaped query() API, powered by terminal automation instead of the headless protocol.",
   "type": "module",
+  "keywords": ["claude", "claude-code", "cli", "tui", "automation", "agent-sdk", "pty", "scripting"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ybouane/dash-p.git"
+  },
+  "homepage": "https://github.com/ybouane/dash-p#readme",
+  "bugs": {
+    "url": "https://github.com/ybouane/dash-p/issues"
+  },
   "publishConfig": {
     "access": "public"
   },

@@ -1,7 +1,7 @@
 <sub>*Follow me on X [@ybouane](https://x.com/ybouane) — I'm building in public.*</sub>
 
 <p align="center">
-  <img src="banner.png" alt="dash-p — make Claude scriptable again" width="640">
+  <img src="https://raw.githubusercontent.com/ybouane/dash-p/main/banner.png" alt="dash-p — make Claude scriptable again" width="640">
 </p>
 
 # Make Claude Scriptable Again
