@@ -47,7 +47,7 @@ A bridge that makes it scriptable.
 
 ```diff
 - import { query } from "@anthropic-ai/claude-agent-sdk";
-+ import { query } from "dash-p";
++ import { query } from "@ybouane/dash-p";
 ```
 
 That’s the whole idea. Same prompt in, same shape of answer out — but produced by driving the interactive TUI instead of the `-p` headless flag.
@@ -61,7 +61,7 @@ That’s the whole idea. Same prompt in, same shape of answer out — but produc
 **CLI — install globally:**
 
 ```bash
-npm install -g dash-p
+npm install -g @ybouane/dash-p
 
 dash-p "what color is the sky"
 ```
@@ -71,17 +71,17 @@ That puts a `dash-p` command on your `PATH`. Verify with `which dash-p`. If `cla
 **SDK — add to a project:**
 
 ```bash
-npm install dash-p
+npm install @ybouane/dash-p
 ```
 
 ```ts
-import { query } from "dash-p";
+import { query } from "@ybouane/dash-p";
 ```
 
 **No install:**
 
 ```bash
-npx dash-p "what color is the sky"
+npx @ybouane/dash-p "what color is the sky"
 ```
 
 ---
@@ -105,7 +105,7 @@ working dir, terminal size, and more).
 The `query()` shape matches `@anthropic-ai/claude-agent-sdk`, so code ports over:
 
 ```ts
-import { query } from "dash-p";
+import { query } from "@ybouane/dash-p";
 
 for await (const msg of query({
   prompt: "In one sentence, what is a pseudo-terminal?",

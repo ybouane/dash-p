@@ -1,8 +1,11 @@
 {
-  "name": "dash-p",
+  "name": "@ybouane/dash-p",
   "version": "0.1.0",
   "description": "Drive the Claude Code TUI programmatically — a -p-style CLI and an Agent-SDK-shaped query() API, powered by terminal automation instead of the headless protocol.",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "dash-p": "./dist/cli/index.js"
   },

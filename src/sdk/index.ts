@@ -3,7 +3,7 @@
  * but powered by driving the interactive Claude TUI through a PTY instead of the
  * headless `-p` stream-json protocol.
  *
- *   import { query } from 'dash-p';
+ *   import { query } from '@ybouane/dash-p';
  *   for await (const msg of query({ prompt: 'Hello', options: { model: 'sonnet' } })) {
  *     if (msg.type === 'assistant') console.log(msg.message.content);
  *   }
