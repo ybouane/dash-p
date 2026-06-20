@@ -1,6 +1,6 @@
 {
   "name": "@ybouane/dash-p",
-  "version": "0.1.1",
+  "version": "2.1.177",
   "description": "Drive the Claude Code TUI programmatically — a -p-style CLI and an Agent-SDK-shaped query() API, powered by terminal automation instead of the headless protocol.",
   "type": "module",
   "keywords": ["claude", "claude-code", "cli", "tui", "automation", "agent-sdk", "pty", "scripting"],
@@ -35,6 +35,7 @@
     "dash-p": "tsx src/cli/index.ts",
     "probe": "tsx probes/capture.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx test/recognizer.test.ts",
     "postinstall": "node scripts/fix-node-pty.mjs",
     "prepublishOnly": "npm run build"
   },
