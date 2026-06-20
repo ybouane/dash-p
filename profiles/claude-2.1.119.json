@@ -4,23 +4,20 @@
   "inputBox": {
     "borderGlyphs": ["╭", "╮", "╰", "╯", "│", "─"],
     "promptMarkers": ["❯", "> ", "│ >"],
-    "placeholders": ["Try \"", "? for shortcuts", "for shortcuts", "⧉"]
+    "placeholders": ["Try \"", "? for shortcuts", "for shortcuts", "for agents", "bypass permissions", "tokens", "⧉"]
   },
+  "_busyNote": "busyMarkers are INTERRUPT HINTS only — the sole reliable 'generating' signal. Do NOT add 'tokens' (newer footers show '0 tokens' while idle) or thinking-words; the recognizer treats a token count as activity only when it co-occurs with an animated spinner.",
   "busyMarkers": [
     "esc to interrupt",
     "Esc to interrupt",
     "esc to stop",
     "ctrl+c to stop",
-    "(esc to interrupt)",
-    "tokens",
-    "Thinking",
-    "Brewing",
-    "Pondering"
+    "(esc to interrupt)"
   ],
-  "idleMarkers": ["? for shortcuts"],
+  "idleMarkers": ["? for shortcuts", "for shortcuts", "for agents", "bypass permissions"],
   "spinnerGlyphs": [
     "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
-    "✻", "✽", "✶", "✳", "✺", "✹", "✢", "·"
+    "✻", "✽", "✶", "✳", "✺", "✹", "✢"
   ],
   "permission": {
     "triggers": [
@@ -56,9 +53,10 @@
     "^\\s*[╭╮╰╯│].*$",
     "^\\s*─+\\s*$",
     "^\\s*❯\\s*$",
-    "^\\s*[✻✽✶✳✺✹✢⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*$",
+    "^\\s*[✻✽✶✳✺✹✢·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*$",
     "for shortcuts",
     "esc to interrupt",
+    "bypass permissions",
     "⧉ In ",
     "⧉",
     "/effort",
