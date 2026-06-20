@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { PtyTransport } from '../transport/pty.js';
 import { TerminalEmulator } from '../emulation/terminal.js';
 import { Recognizer } from '../recognize/recognizer.js';
-import { loadProfile, type Profile } from '../recognize/profile.js';
+import { selectProfile, type Profile } from '../recognize/profile.js';
 import { QuiescenceTracker, contentSignature } from '../observe/quiescence.js';
 import { Actions } from '../act/actions.js';
 import { KEY } from '../act/keys.js';
@@ -129,9 +129,15 @@ export class DashPEngine extends EventEmitter {
   /** Spawn Claude in a PTY and wait until the input box is ready. */
   async start(): Promise<void> {
     const version = this.opts.version ?? this.detectVersion();
-    this.profile = loadProfile(version);
+    const sel = selectProfile(version);
+    this.profile = sel.profile;
     this.recognizer = new Recognizer(this.profile, this.opts.reflow);
-    this.log(`loaded profile for ${this.profile.generatedFor}`, 'info');
+    this.log(
+      sel.drifted
+        ? `claude ${version}: no exact profile, using nearest ${sel.file} (${sel.matchedVersion ?? 'default'})`
+        : `claude ${version}: using profile ${sel.file}`,
+      'info',
+    );
 
     this.transport = new PtyTransport({
       file: this.opts.claudePath,
@@ -177,7 +183,15 @@ export class DashPEngine extends EventEmitter {
     const triggers = this.profile.startup?.trustTriggers ?? [];
     const start = Date.now();
     let acceptedTrust = false;
-    while (this.currentState !== 'ready') {
+    while (true) {
+      if (this.currentState === 'ready') break;
+      // Readiness guard: a confidently-found input box with no interrupt hint
+      // means we're ready, even if the recognizer's busy heuristic is ambiguous
+      // (e.g. profile drift on a newer TUI). This keeps profile drift a latency
+      // problem, never a liveness one.
+      const rec = this.latest?.recognition;
+      if (rec && rec.matched.includes('input-box') && !rec.matched.includes('busy-marker')) break;
+
       if (this.exited) throw new Error('engine exited before becoming ready');
       if (Date.now() - start > this.opts.readyTimeoutMs) {
         throw new Error(
