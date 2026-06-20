@@ -5,7 +5,7 @@
  * JSON profile (by hand, or via the auto-recalibration skill) — never the
  * engine. The recognizer reads these literals; it hardcodes nothing.
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -76,17 +76,65 @@ const here = dirname(fileURLToPath(import.meta.url));
 // dist/recognize -> ../../profiles ; src/recognize -> ../../profiles
 const PROFILE_DIR = join(here, '..', '..', 'profiles');
 
+export interface ProfileSelection {
+  profile: Profile;
+  /** The chosen file, e.g. "claude-2.1.177.json" or "default.json". */
+  file: string;
+  /** The profile version chosen, or null when falling back to default. */
+  matchedVersion: string | null;
+  /** True when the chosen profile's version differs from the installed one. */
+  drifted: boolean;
+}
+
+/** Parse "2.1.177 (Claude Code)" / "claude-2.1.177.json" → [2,1,177]. */
+function parseVersion(v: string): [number, number, number] | null {
+  const m = v.match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function cmpVersion(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/** Weighted absolute distance (major ≫ minor ≫ patch) for the no-`<=` fallback. */
+function versionDistance(a: [number, number, number], b: [number, number, number]): number {
+  return Math.abs(a[0] - b[0]) * 1e6 + Math.abs(a[1] - b[1]) * 1e3 + Math.abs(a[2] - b[2]);
+}
+
 /**
- * Pick the best profile for a given `claude --version` string. For now we match
- * on exact version with a fallback to the bundled default. The recalibration
- * skill writes new `claude-<version>.json` files here.
+ * Pick the best profile for an installed `claude --version`, by nearest version:
+ *   1. the highest `claude-<v>.json` whose version is <= the installed version
+ *      (so a patch bump with no dedicated profile reuses the closest one below);
+ *   2. if none qualify (all profiles are newer), the closest profile by distance;
+ *   3. only if there are no version profiles at all, fall back to `default.json`.
  */
-export function loadProfile(version: string): Profile {
-  const exact = join(PROFILE_DIR, `claude-${version}.json`);
-  const fallback = join(PROFILE_DIR, 'default.json');
-  const path = existsSync(exact) ? exact : fallback;
-  if (!existsSync(path)) {
-    throw new Error(`No profile found for version "${version}" (looked in ${PROFILE_DIR})`);
+export function selectProfile(version: string, dir: string = PROFILE_DIR): ProfileSelection {
+  const installed = parseVersion(version);
+  const candidates = (existsSync(dir) ? readdirSync(dir) : [])
+    .map((file) => ({ file, v: parseVersion(file.replace(/^claude-/, '').replace(/\.json$/, '')) }))
+    .filter((c): c is { file: string; v: [number, number, number] } => /^claude-/.test(c.file) && c.v !== null)
+    .sort((a, b) => cmpVersion(a.v, b.v));
+
+  let chosen: { file: string; v: [number, number, number] } | null = null;
+  if (candidates.length && installed) {
+    const atOrBelow = candidates.filter((c) => cmpVersion(c.v, installed) <= 0);
+    chosen = atOrBelow.length
+      ? atOrBelow[atOrBelow.length - 1]! // highest <= installed
+      : candidates.reduce((best, c) => (versionDistance(c.v, installed) < versionDistance(best.v, installed) ? c : best));
+  } else if (candidates.length) {
+    chosen = candidates[candidates.length - 1]!; // unparseable installed → newest available
   }
-  return JSON.parse(readFileSync(path, 'utf8')) as Profile;
+
+  const file = chosen ? chosen.file : 'default.json';
+  const path = join(dir, file);
+  if (!existsSync(path)) {
+    throw new Error(`No profile found for version "${version}" (looked in ${dir})`);
+  }
+  const profile = JSON.parse(readFileSync(path, 'utf8')) as Profile;
+  const matchedVersion = chosen ? chosen.v.join('.') : null;
+  return { profile, file, matchedVersion, drifted: !!installed && matchedVersion !== installed.join('.') };
+}
+
+export function loadProfile(version: string): Profile {
+  return selectProfile(version).profile;
 }
