@@ -41,17 +41,20 @@ export class Recognizer {
 
     // 2. Look at the lower region (viewport) for live state signals.
     //
-    // The FOOTER is authoritative for busy/idle: "esc to interrupt" while the
-    // model generates, "? for shortcuts" when idle. The spinner glyph is NOT a
-    // reliable busy signal — the post-completion line "✻ Crunched for 1s" reuses
-    // a spinner glyph while the footer is already idle. So the footer wins.
+    // Busy is anchored on the INTERRUPT HINT ("esc to interrupt" / "esc to stop")
+    // — the only reliable "generating" signal. A token counter is NOT a busy
+    // signal: newer TUIs show an always-present "0 tokens" footer while idle, and
+    // older heuristics that matched "tokens" hung forever. A token count only
+    // counts as activity when it co-occurs with a real animated spinner, never
+    // alone. Footer hints (shortcuts/agents/bypass) drift, so they confirm idle
+    // but the input box itself is the ground truth for readiness (see step 4).
     const lower = snap.viewport;
 
+    const interrupt = this.hasAny(lower, this.profile.busyMarkers);
+    if (interrupt) matched.push('busy-marker');
     const idle = this.hasAny(lower, this.profile.idleMarkers);
     if (idle) matched.push('idle-marker');
-    const busy = this.hasAny(lower, this.profile.busyMarkers) && !idle;
-    if (busy) matched.push('busy-marker');
-    const spinning = this.hasSpinner(lower); // kept for debug/masking, not state
+    const generating = interrupt || (this.hasSpinner(lower) && this.hasTokenCount(lower));
 
     const permission = this.detectPermission(snap.lines);
     if (permission) matched.push('permission');
@@ -67,25 +70,28 @@ export class Recognizer {
     if (hasAssistant) matched.push('assistant-text');
     if (blocks.some((b) => b.kind === 'tool_use')) matched.push('tool-use');
 
-    // 4. Decide state by priority.
+    // 4. Decide state by priority. A confidently-found input box with no
+    //    interrupt hint means we're ready — this wins over any ambiguous busy
+    //    heuristic, so profile drift degrades latency, not liveness.
     let state: EngineState;
-    if (inputBoxStart === null && !busy && !permission && !menu) {
-      state = 'launching';
-    } else if (permission) {
+    if (permission) {
       state = 'tool_permission';
     } else if (menu) {
       state = 'menu';
-    } else if (busy) {
-      state = hasAssistant ? 'streaming' : 'thinking';
-    } else {
-      // Input box present, footer idle → ready/complete.
+    } else if (inputBoxStart !== null && !interrupt) {
       state = 'ready';
+    } else if (generating) {
+      state = hasAssistant ? 'streaming' : 'thinking';
+    } else if (inputBoxStart !== null || idle) {
+      state = 'ready';
+    } else {
+      state = 'launching';
     }
 
-    // 5. Confidence: anchored if we found the box and a coherent state.
+    // 5. Confidence: anchored if we found the box and a coherent footer state.
     const confidence = this.scoreConfidence({
       foundBox: inputBoxStart !== null,
-      busy,
+      footerState: idle || generating,
       permission: !!permission,
       menu: !!menu,
       hasAssistant,
@@ -430,6 +436,11 @@ export class Recognizer {
     return lines.some((l) => this.containsAny(l, this.profile.spinnerGlyphs));
   }
 
+  /** A token counter anywhere in the lower region (e.g. "0 tokens", "↓ 51 tokens"). */
+  private hasTokenCount(lines: string[]): boolean {
+    return lines.some((l) => /\b\d[\d,]*\s*tokens\b/.test(l));
+  }
+
   private hasAny(lines: string[], needles: string[]): boolean {
     return lines.some((l) => this.containsAny(l, needles));
   }
@@ -444,14 +455,14 @@ export class Recognizer {
 
   private scoreConfidence(s: {
     foundBox: boolean;
-    busy: boolean;
+    footerState: boolean;
     permission: boolean;
     menu: boolean;
     hasAssistant: boolean;
   }): number {
     let c = 0;
     if (s.foundBox) c += 0.5;
-    if (s.busy) c += 0.2;
+    if (s.footerState) c += 0.2;
     if (s.permission || s.menu) c += 0.2;
     if (s.hasAssistant) c += 0.2;
     return Math.min(1, c || 0.1);
